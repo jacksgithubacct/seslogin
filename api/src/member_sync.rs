@@ -7,7 +7,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{info, warn};
 
 const BLOCKED_UNIT_SES_IDS: &[i64] = &[
-    1,   // 'State Headquarters'
     307, // 'Volunteer Membership Unit'
     269, // 'Interstate' zone (empty at last check)
     277, // 'State Units' zone (empty at last check)
