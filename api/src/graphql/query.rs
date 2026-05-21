@@ -1,0 +1,1642 @@
+#![allow(clippy::too_many_arguments)]
+use super::pagination::{build_connection, pagination_args};
+use anyhow::Result;
+use anyhow::anyhow;
+use async_graphql::Context;
+use async_graphql::Enum;
+use async_graphql::ID;
+use async_graphql::Json;
+use async_graphql::Object;
+use async_graphql::connection::{Connection, EmptyFields};
+use async_graphql::dataloader::DataLoader;
+use std::collections::HashMap;
+use std::collections::HashSet;
+use std::sync::Arc;
+use tracing::warn;
+use xxhash_rust::xxh64::xxh64;
+
+use crate::app::App;
+use crate::app::HasDb;
+use crate::auth;
+use crate::auth::AuthInfo;
+use crate::db;
+use crate::db::Handler;
+use crate::db::ListSessionsQuery;
+use crate::ses_api;
+
+use super::auth::{AuthGuard, AuthRequirement, require_location_access};
+use super::dataloader::DatabaseLoader;
+use super::{CategoryId, LocationId, NitcEventId, PersonId, UserId};
+
+#[derive(Debug, PartialEq)]
+pub struct User<A: App + HasDb + Send + Sync> {
+    _marker: std::marker::PhantomData<A>,
+    pub(super) rec: db::User,
+}
+
+impl<A: App + HasDb + Send + Sync> User<A> {
+    pub fn new(rec: db::User) -> Self {
+        Self {
+            _marker: Default::default(),
+            rec,
+        }
+    }
+}
+
+impl<A: App + HasDb + Send + Sync> Clone for User<A> {
+    fn clone(&self) -> Self {
+        Self {
+            _marker: Default::default(),
+            rec: self.rec.clone(),
+        }
+    }
+}
+
+#[Object]
+impl<A: App + HasDb + Send + Sync + 'static> User<A> {
+    async fn id(&self) -> ID {
+        async_graphql::ID(self.rec.id.clone())
+    }
+    /// this can be null
+    async fn email(&self) -> &Option<String> {
+        &self.rec.email
+    }
+    /// defaults to false if missing
+    async fn is_super(&self) -> bool {
+        self.rec.is_super
+    }
+    async fn is_dev(&self) -> bool {
+        self.rec.is_dev
+    }
+    /// defaults to false if missing
+    async fn deleted(&self) -> bool {
+        self.rec.deleted
+    }
+
+    async fn access_time(&self) -> Option<i64> {
+        self.rec.access_time.map(|t| t as i64)
+    }
+
+    async fn email_summary_location_ids(&self) -> Vec<String> {
+        self.rec
+            .email_config
+            .iter()
+            .filter_map(|(loc_id, val)| {
+                val.as_object()
+                    .filter(|m| m.contains_key("daily"))
+                    .map(|_| loc_id.clone())
+            })
+            .collect()
+    }
+
+    async fn locations(&self, ctx: &Context<'_>) -> Result<Vec<Location<A>>> {
+        if self.rec.is_super {
+            // superusers have access to all locations, so fetch full list of locations
+            let app = ctx.data_unchecked::<Arc<A>>();
+            let items = app
+                .db()
+                .list_locations(crate::db::ListLocationsFilter::EnabledOnly)
+                .await?;
+
+            return Ok(items.into_iter().map(|rec| Location::new_db(rec)).collect());
+        }
+
+        // all other users we list only the units they have grants for
+        let locations = &self.rec.location_grants;
+
+        let selection_set: HashSet<String> = ctx
+            .field()
+            .selection_set()
+            .map(|f| f.name().to_string())
+            .collect();
+        let basic_fields = HashSet::from(["id".to_string(), "__typename".to_string()]);
+        let mut leftover_fields = selection_set.difference(&basic_fields);
+
+        if leftover_fields.next().is_some() {
+            // more than just ID requested, fetch full item
+            let loader = ctx.data_unchecked::<DataLoader<DatabaseLoader<A>>>();
+            let loaded_locations = loader
+                .load_many(
+                    locations
+                        .iter()
+                        .map(|s| LocationId(ID(s.clone())))
+                        .collect::<Vec<LocationId>>(),
+                )
+                .await
+                .map_err(|e| anyhow!("Failed to load locations via DataLoader: {}", e))?;
+            return locations
+                .iter()
+                .map(|s| {
+                    loaded_locations
+                        .get(&LocationId(ID(s.clone())))
+                        .cloned()
+                        .flatten()
+                        .ok_or_else(|| anyhow!("Location with ID {} missing", s))
+                })
+                .collect::<Result<Vec<Location<A>>>>();
+        }
+
+        // only ID requested, skip fetching full item
+        Ok(locations
+            .iter()
+            .map(|s| Location::StaticID(s.clone()))
+            .collect())
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub struct Category<A: App + HasDb + 'static> {
+    _marker: std::marker::PhantomData<A>,
+    pub rec: db::Category,
+}
+
+impl<A: App + HasDb + Send + Sync> Category<A> {
+    pub fn new(rec: db::Category) -> Self {
+        Self {
+            _marker: Default::default(),
+            rec,
+        }
+    }
+}
+
+impl<A: App + HasDb + Send + Sync> Clone for Category<A> {
+    fn clone(&self) -> Self {
+        Self {
+            _marker: Default::default(),
+            rec: self.rec.clone(),
+        }
+    }
+}
+
+#[Object]
+impl<A: App + HasDb + Send + Sync + 'static> Category<A> {
+    async fn id(&self) -> ID {
+        async_graphql::ID(self.rec.id.clone())
+    }
+    async fn name(&self) -> &String {
+        &self.rec.name
+    }
+    async fn enabled(&self) -> bool {
+        self.rec.enabled
+    }
+    async fn nitc_group_id(&self) -> Option<&String> {
+        self.rec.nitc_group_id.as_ref()
+    }
+    async fn nitc_participant_type(&self) -> Option<&String> {
+        self.rec.nitc_participant_type.as_ref()
+    }
+    async fn nitc_group(&self, ctx: &Context<'_>) -> Result<Option<NitcGroup>> {
+        let Some(ref gid) = self.rec.nitc_group_id else {
+            return Ok(None);
+        };
+        let app = ctx.data_unchecked::<Arc<A>>();
+        Ok(app.db().get_nitc_group(gid).await?.map(NitcGroup))
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub struct Person<A: App + HasDb + 'static> {
+    _marker: std::marker::PhantomData<A>,
+    pub(super) rec: db::Person,
+}
+
+impl<A: App + HasDb + Send + Sync> Person<A> {
+    pub fn new(rec: db::Person) -> Self {
+        Self {
+            _marker: Default::default(),
+            rec,
+        }
+    }
+}
+
+impl<A: App + HasDb + Send + Sync> Clone for Person<A> {
+    fn clone(&self) -> Self {
+        Self {
+            _marker: Default::default(),
+            rec: self.rec.clone(),
+        }
+    }
+}
+
+#[Object]
+impl<A: App + HasDb + Send + Sync> Person<A> {
+    async fn id(&self) -> ID {
+        async_graphql::ID(self.rec.id.clone())
+    }
+
+    /// this will be "" if missing
+    async fn first_name(&self) -> &String {
+        &self.rec.first_name
+    }
+
+    /// this will be "" if missing
+    async fn last_name(&self) -> &String {
+        &self.rec.last_name
+    }
+
+    /// this can be null
+    async fn registration_number(&self) -> &Option<String> {
+        &self.rec.registration_number
+    }
+    /// for backwards compatibility
+    async fn member_number(&self) -> &Option<String> {
+        &self.rec.registration_number
+    }
+
+    /// this can be null
+    async fn ses_api_person_id(&self) -> &Option<String> {
+        &self.rec.ses_api_person_id
+    }
+
+    async fn deleted(&self) -> bool {
+        self.rec.deleted.is_some()
+    }
+
+    async fn periods<'ctx>(
+        &self,
+        ctx: &Context<'ctx>,
+        after: Option<String>,
+        before: Option<String>,
+        first: Option<i32>,
+        last: Option<i32>,
+    ) -> Result<Connection<String, Period<A>, EmptyFields, EmptyFields>> {
+        let after_cursor = after.as_deref().map(decode_period_cursor).transpose()?;
+        let before_cursor = before.as_deref().map(decode_period_cursor).transpose()?;
+        let has_after = after_cursor.is_some();
+        let has_before = before_cursor.is_some();
+        let (page_size, is_last_mode) =
+            pagination_args(first, last, DEFAULT_PERIOD_PAGE_SIZE, MAX_PERIOD_PAGE_SIZE)?;
+        let fetch_limit = i32::try_from(page_size.saturating_add(1))
+            .map_err(|_| anyhow!("Requested page is too large"))?;
+
+        require_location_access(ctx, &self.rec.location_id)?;
+        let app = ctx.data_unchecked::<Arc<A>>();
+        let items = app
+            .db()
+            .list_periods_for_person(
+                &self.rec.id,
+                None,
+                None,
+                db::ListPeriodsPage {
+                    after: after_cursor,
+                    before: before_cursor,
+                    limit: fetch_limit,
+                    descending: !is_last_mode,
+                },
+            )
+            .await
+            .map_err(|e| {
+                warn!("db error: {:?}", e);
+                e
+            })?;
+
+        Ok(build_connection(
+            items,
+            page_size,
+            is_last_mode,
+            has_after,
+            has_before,
+            |p| (encode_period_cursor(p), Period::new(p.clone())),
+        ))
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub struct Period<A: App + HasDb + 'static> {
+    _marker: std::marker::PhantomData<A>,
+    pub(super) rec: db::Period,
+}
+
+impl<A: App + HasDb + Send + Sync> Period<A> {
+    pub(crate) fn new(rec: db::Period) -> Self {
+        Self {
+            _marker: Default::default(),
+            rec,
+        }
+    }
+}
+
+#[Object]
+impl<A: App + HasDb + Send + Sync> Period<A> {
+    async fn id(&self) -> ID {
+        ID(self.rec.id.clone())
+    }
+
+    async fn person_id(&self) -> ID {
+        ID(self.rec.person_id.clone())
+    }
+
+    async fn person(&self, ctx: &Context<'_>) -> Result<Person<A>> {
+        let loader = ctx.data_unchecked::<DataLoader<DatabaseLoader<A>>>();
+        loader
+            .load_one(PersonId(ID(self.rec.person_id.clone())))
+            .await
+            .map_err(|e| anyhow!("Failed to load person via DataLoader: {}", e))?
+            .flatten()
+            .ok_or_else(|| anyhow!("Person with ID {} missing", &self.rec.person_id))
+    }
+
+    async fn location_id(&self) -> ID {
+        ID(self.rec.location_id.clone())
+    }
+
+    async fn location(&self, ctx: &Context<'_>) -> Result<Location<A>> {
+        let loader = ctx.data_unchecked::<DataLoader<DatabaseLoader<A>>>();
+        loader
+            .load_one(LocationId(ID(self.rec.location_id.clone())))
+            .await
+            .map_err(|e| anyhow!("Failed to load location via DataLoader: {}", e))?
+            .flatten()
+            .ok_or_else(|| anyhow!("Location with ID {} missing", &self.rec.location_id))
+    }
+
+    async fn category_id(&self) -> Option<ID> {
+        self.rec.category_id.clone().map(ID)
+    }
+
+    async fn category(&self, ctx: &Context<'_>) -> Result<Option<Category<A>>> {
+        Ok(match &self.rec.category_id {
+            None => None,
+            Some(category_id) => {
+                let loader = ctx.data_unchecked::<DataLoader<DatabaseLoader<A>>>();
+                Some(
+                    loader
+                        .load_one(CategoryId(ID(category_id.clone())))
+                        .await
+                        .map_err(|e| anyhow!("Failed to load category via DataLoader: {}", e))?
+                        .flatten()
+                        .ok_or_else(|| anyhow!("Category with ID {} missing", &category_id))?,
+                )
+            }
+        })
+    }
+
+    async fn start_time(&self) -> i64 {
+        self.rec.start_time as i64
+    }
+
+    async fn end_time(&self) -> Option<i64> {
+        self.rec.end_time.map(|i| i as i64)
+    }
+
+    async fn nitc_event_id(&self, ctx: &Context<'_>) -> Result<Option<String>> {
+        let Some(ref event_id) = self.rec.nitc_event_id else {
+            return Ok(None);
+        };
+        let loader = ctx.data_unchecked::<DataLoader<DatabaseLoader<A>>>();
+        let event = loader
+            .load_one(NitcEventId(event_id.clone()))
+            .await
+            .map_err(|e| anyhow!("Failed to load NITC event via DataLoader: {}", e))?;
+        Ok(event
+            .and_then(|e| e.ses_api_nitc_id)
+            .map(|id| id.to_string()))
+    }
+
+    async fn nitc_export_status(&self, ctx: &Context<'_>) -> Result<Option<NitcExportStatus>> {
+        let Some(ref cat_id) = self.rec.category_id else {
+            return Ok(None);
+        };
+        let loader = ctx.data_unchecked::<DataLoader<DatabaseLoader<A>>>();
+        let cat = loader
+            .load_one(CategoryId(ID(cat_id.clone())))
+            .await
+            .map_err(|e| anyhow!("Failed to load category via DataLoader: {}", e))?
+            .flatten();
+        if cat.is_none_or(|c| c.rec.nitc_group_id.is_none()) {
+            return Ok(None);
+        }
+        // Period must be exported and its nitc_event must also be fully synced.
+        let synced = if let Some(ref event_id) = self.rec.nitc_event_id {
+            if self.rec.nitc_exported_version == Some(self.rec.version) {
+                let event = loader
+                    .load_one(NitcEventId(event_id.clone()))
+                    .await
+                    .map_err(|e| anyhow!("Failed to load NITC event via DataLoader: {}", e))?;
+                event.is_some_and(|e| e.synced_version == Some(e.version))
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+        if synced {
+            Ok(Some(NitcExportStatus::Synced))
+        } else {
+            let location = loader
+                .load_one(LocationId(ID(self.rec.location_id.clone())))
+                .await
+                .map_err(|e| anyhow!("Failed to load location via DataLoader: {}", e))?
+                .flatten()
+                .ok_or_else(|| anyhow!("Location with ID {} missing", &self.rec.location_id))?;
+            match location {
+                Location::DB { rec, .. } => match rec.nitc_enabled {
+                    Some(cutover) if self.rec.start_time >= cutover => {
+                        Ok(Some(NitcExportStatus::Pending))
+                    }
+                    _ => Ok(None),
+                },
+                Location::StaticID(_) => Ok(None),
+            }
+        }
+    }
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+pub enum NitcExportStatus {
+    Synced,
+    Pending,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct MemberPeriodSummary<A: App + HasDb + Send + Sync> {
+    _marker: std::marker::PhantomData<A>,
+    person_id: String,
+    total_time: i64,
+}
+
+impl<A: App + HasDb + Send + Sync> MemberPeriodSummary<A> {
+    fn new(person_id: String, total_time: i64) -> Self {
+        Self {
+            _marker: Default::default(),
+            person_id,
+            total_time,
+        }
+    }
+}
+
+#[Object]
+impl<A: App + HasDb + Send + Sync + 'static> MemberPeriodSummary<A> {
+    async fn person_id(&self) -> ID {
+        ID(self.person_id.clone())
+    }
+
+    async fn person(&self, ctx: &Context<'_>) -> Result<Person<A>> {
+        let loader = ctx.data_unchecked::<DataLoader<DatabaseLoader<A>>>();
+        loader
+            .load_one(PersonId(ID(self.person_id.clone())))
+            .await
+            .map_err(|e| anyhow!("Failed to load person via DataLoader: {}", e))?
+            .flatten()
+            .ok_or_else(|| anyhow!("Person with ID {} missing", &self.person_id))
+    }
+
+    async fn total_time(&self) -> i64 {
+        self.total_time
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CategoryPeriodSummary<A: App + HasDb + Send + Sync> {
+    _marker: std::marker::PhantomData<A>,
+    category_id: String,
+    total_time: i64,
+}
+
+impl<A: App + HasDb + Send + Sync> CategoryPeriodSummary<A> {
+    fn new(category_id: String, total_time: i64) -> Self {
+        Self {
+            _marker: Default::default(),
+            category_id,
+            total_time,
+        }
+    }
+}
+
+#[Object]
+impl<A: App + HasDb + Send + Sync + 'static> CategoryPeriodSummary<A> {
+    async fn category_id(&self) -> ID {
+        ID(self.category_id.clone())
+    }
+
+    async fn category(&self, ctx: &Context<'_>) -> Result<Category<A>> {
+        let loader = ctx.data_unchecked::<DataLoader<DatabaseLoader<A>>>();
+        loader
+            .load_one(CategoryId(ID(self.category_id.clone())))
+            .await
+            .map_err(|e| anyhow!("Failed to load category via DataLoader: {}", e))?
+            .flatten()
+            .ok_or_else(|| anyhow!("Category with ID {} missing", &self.category_id))
+    }
+
+    async fn total_time(&self) -> i64 {
+        self.total_time
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct MemberCategoryPeriodSummary<A: App + HasDb + Send + Sync> {
+    _marker: std::marker::PhantomData<A>,
+    person_id: String,
+    total_time: i64,
+    categories: Vec<CategoryPeriodSummary<A>>,
+}
+
+impl<A: App + HasDb + Send + Sync> MemberCategoryPeriodSummary<A> {
+    fn new(person_id: String, total_time: i64, categories: Vec<CategoryPeriodSummary<A>>) -> Self {
+        Self {
+            _marker: Default::default(),
+            person_id,
+            total_time,
+            categories,
+        }
+    }
+}
+
+#[Object]
+impl<A: App + HasDb + Send + Sync + 'static> MemberCategoryPeriodSummary<A> {
+    async fn person_id(&self) -> ID {
+        ID(self.person_id.clone())
+    }
+
+    async fn person(&self, ctx: &Context<'_>) -> Result<Person<A>> {
+        let loader = ctx.data_unchecked::<DataLoader<DatabaseLoader<A>>>();
+        loader
+            .load_one(PersonId(ID(self.person_id.clone())))
+            .await
+            .map_err(|e| anyhow!("Failed to load person via DataLoader: {}", e))?
+            .flatten()
+            .ok_or_else(|| anyhow!("Person with ID {} missing", &self.person_id))
+    }
+
+    async fn total_time(&self) -> i64 {
+        self.total_time
+    }
+
+    async fn categories(&self) -> &Vec<CategoryPeriodSummary<A>> {
+        &self.categories
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CategoryMemberPeriodSummary<A: App + HasDb + Send + Sync> {
+    _marker: std::marker::PhantomData<A>,
+    category_id: String,
+    total_time: i64,
+    members: Vec<MemberPeriodSummary<A>>,
+}
+
+impl<A: App + HasDb + Send + Sync> CategoryMemberPeriodSummary<A> {
+    fn new(category_id: String, total_time: i64, members: Vec<MemberPeriodSummary<A>>) -> Self {
+        Self {
+            _marker: Default::default(),
+            category_id,
+            total_time,
+            members,
+        }
+    }
+}
+
+#[Object]
+impl<A: App + HasDb + Send + Sync + 'static> CategoryMemberPeriodSummary<A> {
+    async fn category_id(&self) -> ID {
+        ID(self.category_id.clone())
+    }
+
+    async fn category(&self, ctx: &Context<'_>) -> Result<Category<A>> {
+        let loader = ctx.data_unchecked::<DataLoader<DatabaseLoader<A>>>();
+        loader
+            .load_one(CategoryId(ID(self.category_id.clone())))
+            .await
+            .map_err(|e| anyhow!("Failed to load category via DataLoader: {}", e))?
+            .flatten()
+            .ok_or_else(|| anyhow!("Category with ID {} missing", &self.category_id))
+    }
+
+    async fn total_time(&self) -> i64 {
+        self.total_time
+    }
+
+    async fn members(&self) -> &Vec<MemberPeriodSummary<A>> {
+        &self.members
+    }
+}
+
+fn period_duration(period: &db::Period) -> Option<u64> {
+    period
+        .end_time
+        .and_then(|end_time| end_time.checked_sub(period.start_time))
+}
+
+const DEFAULT_PERIOD_PAGE_SIZE: usize = 100;
+const MAX_PERIOD_PAGE_SIZE: usize = 1000;
+
+fn encode_period_cursor(period: &db::Period) -> String {
+    format!("{}:{}", period.start_time, period.id)
+}
+
+fn decode_period_cursor(cursor: &str) -> Result<db::PeriodCursor> {
+    let mut parts = cursor.splitn(2, ':');
+    let start_time = parts
+        .next()
+        .ok_or_else(|| anyhow!("Invalid cursor"))?
+        .parse::<u64>()
+        .map_err(|_| anyhow!("Invalid cursor"))?;
+    let id = parts.next().ok_or_else(|| anyhow!("Invalid cursor"))?;
+    if id.is_empty() {
+        return Err(anyhow!("Invalid cursor"));
+    }
+
+    Ok(db::PeriodCursor {
+        start_time,
+        id: id.to_string(),
+    })
+}
+
+#[derive(Debug, PartialEq)]
+pub enum Location<A: App + HasDb + 'static> {
+    DB {
+        _marker: std::marker::PhantomData<A>,
+        rec: db::Location,
+    },
+    StaticID(String),
+}
+
+impl<A: App + HasDb + Send + Sync> Location<A> {
+    pub fn new_db(rec: db::Location) -> Self {
+        Self::DB {
+            _marker: Default::default(),
+            rec,
+        }
+    }
+}
+
+impl<A: App + HasDb + Send + Sync> Clone for Location<A> {
+    fn clone(&self) -> Self {
+        match self {
+            Location::DB { rec, _marker: _ } => Location::new_db(rec.clone()),
+            Location::StaticID(id) => Location::StaticID(id.clone()),
+        }
+    }
+}
+
+#[Object]
+impl<A: App + HasDb + Send + Sync> Location<A> {
+    async fn id(&self) -> ID {
+        match self {
+            Location::DB { rec, .. } => ID(rec.id.clone()),
+            Location::StaticID(id) => ID(id.clone()),
+        }
+    }
+
+    async fn name(&self) -> Result<String> {
+        if let Location::DB { rec, _marker: _ } = self {
+            Ok(rec.name.clone())
+        } else {
+            Err(anyhow!("No name for static ID location"))
+        }
+    }
+
+    async fn enabled(&self) -> Result<bool> {
+        if let Location::DB { rec, _marker: _ } = self {
+            Ok(rec.enabled)
+        } else {
+            Err(anyhow!("No enabled field for static ID location"))
+        }
+    }
+
+    async fn nitc_enabled(&self) -> Result<Option<i64>> {
+        if let Location::DB { rec, _marker: _ } = self {
+            Ok(rec.nitc_enabled.map(|ts| ts as i64))
+        } else {
+            Err(anyhow!("No nitc_enabled field for static ID location"))
+        }
+    }
+
+    async fn ses_api_headquarters_id(&self) -> Result<Option<String>> {
+        if let Location::DB { rec, _marker: _ } = self {
+            Ok(rec.ses_api_headquarters_id.clone())
+        } else {
+            Err(anyhow!("No ses_api_headquarters_id for static ID location"))
+        }
+    }
+
+    async fn last_successful_member_sync(&self) -> Result<Option<i64>> {
+        if let Location::DB { rec, _marker: _ } = self {
+            Ok(rec.last_successful_member_sync.map(|t| t as i64))
+        } else {
+            Err(anyhow!(
+                "No last_successful_member_sync for static ID location"
+            ))
+        }
+    }
+
+    async fn people(&self, ctx: &Context<'_>) -> Result<Vec<Person<A>>> {
+        if let Location::DB { rec, _marker: _ } = self {
+            let app = ctx.data_unchecked::<Arc<A>>();
+            let items = app
+                .db()
+                .list_people_for_location(&rec.id, true)
+                .await
+                .map_err(|e| {
+                    warn!("db error: {:?}", e);
+                    e
+                })?;
+
+            Ok(items.into_iter().map(|p| Person::new(p)).collect())
+        } else {
+            Err(anyhow!("No people for static ID location"))
+        }
+    }
+
+    async fn periods(
+        &self,
+        ctx: &Context<'_>,
+        only_active: Option<bool>,
+        start_time: Option<i64>,
+        end_time: Option<i64>,
+        after: Option<String>,
+        before: Option<String>,
+        first: Option<i32>,
+        last: Option<i32>,
+    ) -> Result<Connection<String, Period<A>, EmptyFields, EmptyFields>> {
+        let after_cursor = after.as_deref().map(decode_period_cursor).transpose()?;
+        let before_cursor = before.as_deref().map(decode_period_cursor).transpose()?;
+        let has_after = after_cursor.is_some();
+        let has_before = before_cursor.is_some();
+        let (page_size, is_last_mode) =
+            pagination_args(first, last, DEFAULT_PERIOD_PAGE_SIZE, MAX_PERIOD_PAGE_SIZE)?;
+        let fetch_limit = i32::try_from(page_size.saturating_add(1))
+            .map_err(|_| anyhow!("Requested page is too large"))?;
+
+        let range = match (start_time, end_time) {
+            (None, None) => None,
+            (Some(_), None) | (None, Some(_)) => {
+                return Err(anyhow!("start_time and end_time must both be provided"));
+            }
+            (Some(start_time), Some(end_time)) => {
+                if start_time >= end_time {
+                    return Err(anyhow!("start_time must be before end_time"));
+                }
+                let range_start = u64::try_from(start_time)
+                    .map_err(|_| anyhow!("start_time must be a non-negative unix timestamp"))?;
+                let range_end = u64::try_from(end_time)
+                    .map_err(|_| anyhow!("end_time must be a non-negative unix timestamp"))?;
+                Some((range_start, range_end))
+            }
+        };
+
+        if let Location::DB { rec, _marker: _ } = self {
+            require_location_access(ctx, &rec.id)?;
+            let app = ctx.data_unchecked::<Arc<A>>();
+            let items = app
+                .db()
+                .list_periods_for_location(
+                    &rec.id,
+                    only_active.unwrap_or(false),
+                    range,
+                    db::ListPeriodsPage {
+                        after: after_cursor,
+                        before: before_cursor,
+                        limit: fetch_limit,
+                        descending: !is_last_mode,
+                    },
+                )
+                .await
+                .map_err(|e| {
+                    warn!("db error: {:?}", e);
+                    e
+                })?;
+
+            Ok(build_connection(
+                items,
+                page_size,
+                is_last_mode,
+                has_after,
+                has_before,
+                |p| (encode_period_cursor(p), Period::new(p.clone())),
+            ))
+        } else {
+            Err(anyhow!("No periods for static ID location"))
+        }
+    }
+
+    async fn period_summary_by_member(
+        &self,
+        ctx: &Context<'_>,
+        start_time: i64,
+        end_time: i64,
+    ) -> Result<Vec<MemberPeriodSummary<A>>> {
+        if start_time >= end_time {
+            return Err(anyhow!("start_time must be before end_time"));
+        }
+        let range_start = u64::try_from(start_time)
+            .map_err(|_| anyhow!("start_time must be a non-negative unix timestamp"))?;
+        let range_end = u64::try_from(end_time)
+            .map_err(|_| anyhow!("end_time must be a non-negative unix timestamp"))?;
+
+        if let Location::DB { rec, _marker: _ } = self {
+            let app = ctx.data_unchecked::<Arc<A>>();
+            let periods = app
+                .db()
+                .list_periods_for_location(
+                    &rec.id,
+                    false,
+                    Some((range_start, range_end)),
+                    db::ListPeriodsPage {
+                        after: None,
+                        before: None,
+                        limit: i32::MAX,
+                        descending: true,
+                    },
+                )
+                .await
+                .map_err(|e| {
+                    warn!("db error: {:?}", e);
+                    e
+                })?;
+
+            let mut totals_by_member: HashMap<String, u64> = HashMap::new();
+            for period in periods {
+                if let Some(duration) = period_duration(&period) {
+                    *totals_by_member.entry(period.person_id).or_insert(0) += duration;
+                }
+            }
+
+            let mut rows: Vec<MemberPeriodSummary<A>> = totals_by_member
+                .into_iter()
+                .map(|(person_id, total_time)| {
+                    MemberPeriodSummary::new(person_id, total_time as i64)
+                })
+                .collect();
+            rows.sort_by_key(|b| std::cmp::Reverse(b.total_time));
+
+            Ok(rows)
+        } else {
+            Err(anyhow!("No period summaries for static ID location"))
+        }
+    }
+
+    async fn period_summary_by_category(
+        &self,
+        ctx: &Context<'_>,
+        start_time: i64,
+        end_time: i64,
+    ) -> Result<Vec<CategoryPeriodSummary<A>>> {
+        if start_time >= end_time {
+            return Err(anyhow!("start_time must be before end_time"));
+        }
+        let range_start = u64::try_from(start_time)
+            .map_err(|_| anyhow!("start_time must be a non-negative unix timestamp"))?;
+        let range_end = u64::try_from(end_time)
+            .map_err(|_| anyhow!("end_time must be a non-negative unix timestamp"))?;
+
+        if let Location::DB { rec, _marker: _ } = self {
+            let app = ctx.data_unchecked::<Arc<A>>();
+            let periods = app
+                .db()
+                .list_periods_for_location(
+                    &rec.id,
+                    false,
+                    Some((range_start, range_end)),
+                    db::ListPeriodsPage {
+                        after: None,
+                        before: None,
+                        limit: i32::MAX,
+                        descending: true,
+                    },
+                )
+                .await
+                .map_err(|e| {
+                    warn!("db error: {:?}", e);
+                    e
+                })?;
+
+            let mut totals_by_category: HashMap<String, u64> = HashMap::new();
+            for period in periods {
+                if let (Some(category_id), Some(duration)) =
+                    (period.category_id.clone(), period_duration(&period))
+                {
+                    *totals_by_category.entry(category_id).or_insert(0) += duration;
+                }
+            }
+
+            let mut rows: Vec<CategoryPeriodSummary<A>> = totals_by_category
+                .into_iter()
+                .map(|(category_id, total_time)| {
+                    CategoryPeriodSummary::new(category_id, total_time as i64)
+                })
+                .collect();
+            rows.sort_by_key(|b| std::cmp::Reverse(b.total_time));
+
+            Ok(rows)
+        } else {
+            Err(anyhow!("No period summaries for static ID location"))
+        }
+    }
+
+    async fn period_summary_by_member_by_category(
+        &self,
+        ctx: &Context<'_>,
+        start_time: i64,
+        end_time: i64,
+    ) -> Result<Vec<MemberCategoryPeriodSummary<A>>> {
+        if start_time >= end_time {
+            return Err(anyhow!("start_time must be before end_time"));
+        }
+        let range_start = u64::try_from(start_time)
+            .map_err(|_| anyhow!("start_time must be a non-negative unix timestamp"))?;
+        let range_end = u64::try_from(end_time)
+            .map_err(|_| anyhow!("end_time must be a non-negative unix timestamp"))?;
+
+        if let Location::DB { rec, _marker: _ } = self {
+            let app = ctx.data_unchecked::<Arc<A>>();
+            let periods = app
+                .db()
+                .list_periods_for_location(
+                    &rec.id,
+                    false,
+                    Some((range_start, range_end)),
+                    db::ListPeriodsPage {
+                        after: None,
+                        before: None,
+                        limit: i32::MAX,
+                        descending: true,
+                    },
+                )
+                .await
+                .map_err(|e| {
+                    warn!("db error: {:?}", e);
+                    e
+                })?;
+
+            let mut totals_by_member: HashMap<String, HashMap<String, u64>> = HashMap::new();
+            for period in periods {
+                if let (Some(category_id), Some(duration)) =
+                    (period.category_id.clone(), period_duration(&period))
+                {
+                    *totals_by_member
+                        .entry(period.person_id)
+                        .or_default()
+                        .entry(category_id)
+                        .or_insert(0) += duration;
+                }
+            }
+
+            let mut rows = totals_by_member
+                .into_iter()
+                .map(|(person_id, totals_by_category)| {
+                    let mut categories: Vec<CategoryPeriodSummary<A>> = totals_by_category
+                        .into_iter()
+                        .map(|(category_id, total_time)| {
+                            CategoryPeriodSummary::new(category_id, total_time as i64)
+                        })
+                        .collect();
+                    categories.sort_by_key(|b| std::cmp::Reverse(b.total_time));
+                    let total_time = categories.iter().map(|c| c.total_time).sum::<i64>();
+
+                    MemberCategoryPeriodSummary::new(person_id, total_time, categories)
+                })
+                .collect::<Vec<MemberCategoryPeriodSummary<A>>>();
+            rows.sort_by_key(|b| std::cmp::Reverse(b.total_time));
+
+            Ok(rows)
+        } else {
+            Err(anyhow!("No period summaries for static ID location"))
+        }
+    }
+
+    async fn period_summary_by_category_by_member(
+        &self,
+        ctx: &Context<'_>,
+        start_time: i64,
+        end_time: i64,
+    ) -> Result<Vec<CategoryMemberPeriodSummary<A>>> {
+        if start_time >= end_time {
+            return Err(anyhow!("start_time must be before end_time"));
+        }
+        let range_start = u64::try_from(start_time)
+            .map_err(|_| anyhow!("start_time must be a non-negative unix timestamp"))?;
+        let range_end = u64::try_from(end_time)
+            .map_err(|_| anyhow!("end_time must be a non-negative unix timestamp"))?;
+
+        if let Location::DB { rec, _marker: _ } = self {
+            let app = ctx.data_unchecked::<Arc<A>>();
+            let periods = app
+                .db()
+                .list_periods_for_location(
+                    &rec.id,
+                    false,
+                    Some((range_start, range_end)),
+                    db::ListPeriodsPage {
+                        after: None,
+                        before: None,
+                        limit: i32::MAX,
+                        descending: true,
+                    },
+                )
+                .await
+                .map_err(|e| {
+                    warn!("db error: {:?}", e);
+                    e
+                })?;
+
+            let mut totals_by_category: HashMap<String, HashMap<String, u64>> = HashMap::new();
+            for period in periods {
+                if let (Some(category_id), Some(duration)) =
+                    (period.category_id.clone(), period_duration(&period))
+                {
+                    *totals_by_category
+                        .entry(category_id)
+                        .or_default()
+                        .entry(period.person_id)
+                        .or_insert(0) += duration;
+                }
+            }
+
+            let mut rows = totals_by_category
+                .into_iter()
+                .map(|(category_id, totals_by_member)| {
+                    let mut members: Vec<MemberPeriodSummary<A>> = totals_by_member
+                        .into_iter()
+                        .map(|(person_id, total_time)| {
+                            MemberPeriodSummary::new(person_id, total_time as i64)
+                        })
+                        .collect();
+                    members.sort_by_key(|b| std::cmp::Reverse(b.total_time));
+                    let total_time = members.iter().map(|m| m.total_time).sum::<i64>();
+
+                    CategoryMemberPeriodSummary::new(category_id, total_time, members)
+                })
+                .collect::<Vec<CategoryMemberPeriodSummary<A>>>();
+            rows.sort_by_key(|b| std::cmp::Reverse(b.total_time));
+
+            Ok(rows)
+        } else {
+            Err(anyhow!("No period summaries for static ID location"))
+        }
+    }
+
+    async fn sessions(&self, ctx: &Context<'_>) -> Result<Vec<Session<A>>> {
+        if let Location::DB { rec, _marker: _ } = self {
+            require_location_access(ctx, &rec.id)?;
+            let app = ctx.data_unchecked::<Arc<A>>();
+            let items = app
+                .db()
+                .list_sessions(ListSessionsQuery::ByLocation(rec.id.to_string()))
+                .await
+                .map_err(|e| {
+                    warn!("db error: {:?}", e);
+                    e
+                })?;
+
+            Ok(items.into_iter().map(Session::new).collect())
+        } else {
+            Err(anyhow!("No sessions for static ID location"))
+        }
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub struct Session<A: App + HasDb + Send + Sync> {
+    _marker: std::marker::PhantomData<A>,
+    pub(super) rec: db::Session,
+}
+
+impl<A: App + HasDb + Send + Sync> Session<A> {
+    pub(crate) fn new(rec: db::Session) -> Self {
+        Self {
+            _marker: Default::default(),
+            rec,
+        }
+    }
+}
+
+impl<A: App + HasDb + Send + Sync> Clone for Session<A> {
+    fn clone(&self) -> Self {
+        Self {
+            _marker: Default::default(),
+            rec: self.rec.clone(),
+        }
+    }
+}
+
+#[Object]
+impl<A: App + HasDb + Send + Sync + 'static> Session<A> {
+    async fn id(&self) -> ID {
+        ID(self.rec.id.clone())
+    }
+
+    async fn last_contact(&self) -> Option<i64> {
+        self.rec.last_contact.map(|ts| ts as i64)
+    }
+
+    async fn client_version(&self) -> Option<&str> {
+        self.rec.client_version.as_deref()
+    }
+
+    async fn name(&self) -> &String {
+        &self.rec.name
+    }
+
+    async fn location_id(&self) -> ID {
+        ID(self.rec.location_id.clone())
+    }
+
+    async fn location(&self, ctx: &Context<'_>) -> Result<Location<A>> {
+        let loader = ctx.data_unchecked::<DataLoader<DatabaseLoader<A>>>();
+        loader
+            .load_one(LocationId(ID(self.rec.location_id.clone())))
+            .await
+            .map_err(|e| anyhow!("Failed to load location via DataLoader: {}", e))?
+            .flatten()
+            .ok_or_else(|| anyhow!("Location with ID {} missing", &self.rec.location_id))
+    }
+
+    async fn code(&self) -> &Option<String> {
+        // TODO: careful who we show this to
+        &self.rec.code
+    }
+
+    async fn healthcheck_url(&self) -> Option<&str> {
+        self.rec.healthcheck_url.as_deref()
+    }
+
+    async fn config(&self) -> Json<serde_json::Map<String, serde_json::Value>> {
+        Json(self.rec.config.clone())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ApiToken {
+    pub(super) rec: db::ApiToken,
+}
+
+impl ApiToken {
+    pub(crate) fn new(rec: db::ApiToken) -> Self {
+        Self { rec }
+    }
+}
+
+#[Object]
+impl ApiToken {
+    async fn id(&self) -> ID {
+        ID(self.rec.id.clone())
+    }
+    async fn name(&self) -> &str {
+        &self.rec.name
+    }
+    async fn location_grants(&self) -> &Vec<String> {
+        &self.rec.location_grants
+    }
+    async fn read_only(&self) -> bool {
+        self.rec.read_only
+    }
+    async fn created_at(&self) -> i64 {
+        self.rec.created_at as i64
+    }
+    async fn created_by_user_id(&self) -> ID {
+        ID(self.rec.created_by_user_id.clone())
+    }
+    async fn expires_at(&self) -> Option<i64> {
+        self.rec.expires_at.map(|t| t as i64)
+    }
+    async fn revoked_at(&self) -> Option<i64> {
+        self.rec.revoked_at.map(|t| t as i64)
+    }
+    async fn last_used_at(&self) -> Option<i64> {
+        self.rec.last_used_at.map(|t| t as i64)
+    }
+}
+
+#[derive(Clone, Debug)]
+struct SesHeadquarters {
+    rec: ses_api::SesHeadquarters,
+}
+
+impl SesHeadquarters {
+    fn new(rec: ses_api::SesHeadquarters) -> Self {
+        Self { rec }
+    }
+
+    fn opaque_id_for_ses_id(ses_id: i64) -> ID {
+        let input = format!("SES Headquarters {}", ses_id);
+        let hash = xxh64(input.as_bytes(), 0);
+        ID(format!("{:016x}", hash))
+    }
+}
+
+#[Object]
+impl SesHeadquarters {
+    async fn id(&self) -> ID {
+        let ses_id = self.rec.id.expect("sesId should always be present");
+        Self::opaque_id_for_ses_id(ses_id)
+    }
+
+    async fn ses_id(&self) -> ID {
+        ID(self
+            .rec
+            .id
+            .expect("sesId should always be present")
+            .to_string())
+    }
+
+    async fn name(&self) -> &Option<String> {
+        &self.rec.name
+    }
+
+    async fn code(&self) -> &Option<String> {
+        &self.rec.code
+    }
+
+    async fn latitude(&self) -> Option<f64> {
+        self.rec.latitude
+    }
+
+    async fn longitude(&self) -> Option<f64> {
+        self.rec.longitude
+    }
+
+    #[graphql(name = "type")]
+    async fn type_(&self) -> &Option<String> {
+        &self.rec.headquarters_type
+    }
+
+    async fn status(&self) -> &Option<String> {
+        &self.rec.status
+    }
+
+    async fn zone(&self) -> Option<SesHeadquarters> {
+        self.rec
+            .zone
+            .as_deref()
+            .cloned()
+            .and_then(|zone| zone.id.map(|_| SesHeadquarters::new(zone)))
+    }
+}
+
+#[derive(Clone, Debug)]
+struct SesNonIncidentTag {
+    id: i32,
+    name: String,
+    primary_activity_name: String,
+}
+
+#[Object]
+impl SesNonIncidentTag {
+    async fn id(&self) -> String {
+        self.id.to_string()
+    }
+
+    async fn name(&self) -> &str {
+        &self.name
+    }
+
+    async fn primary_activity_name(&self) -> &str {
+        &self.primary_activity_name
+    }
+}
+
+pub struct NitcGroup(pub db::NitcGroup);
+
+#[Object]
+impl NitcGroup {
+    async fn id(&self) -> &str {
+        &self.0.id
+    }
+
+    async fn nitc_type(&self) -> &str {
+        &self.0.nitc_type
+    }
+
+    async fn ses_tags(&self) -> Result<Vec<SesNonIncidentTag>> {
+        let ses_client = make_ses_client()?;
+        let tag_map = ses_client.fetch_nonincident_tags_cached().await?;
+        let mut tags: Vec<SesNonIncidentTag> = self
+            .0
+            .nitc_tag_ids
+            .iter()
+            .filter_map(|id| tag_map.get(id))
+            .map(|t| SesNonIncidentTag {
+                id: t.id,
+                name: t.name.clone(),
+                primary_activity_name: t.primary_activity_name.clone(),
+            })
+            .collect();
+        tags.sort_by_key(|t| t.id);
+        Ok(tags)
+    }
+}
+
+pub struct QueryRoot<A: App + HasDb + Send + Sync> {
+    _marker: std::marker::PhantomData<A>,
+}
+
+impl<A: App + HasDb + Send + Sync> QueryRoot<A> {
+    pub fn new() -> Self {
+        Self {
+            _marker: Default::default(),
+        }
+    }
+}
+
+impl<A: App + HasDb + Send + Sync> Default for QueryRoot<A> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+fn make_ses_client() -> Result<ses_api::SesClient> {
+    let base_url =
+        std::env::var("SES_API_BASE_URL").map_err(|_| anyhow!("SES_API_BASE_URL is required"))?;
+    let api_key = std::env::var("SES_API_KEY").map_err(|_| anyhow!("SES_API_KEY is required"))?;
+    let page_limit = std::env::var("SES_PAGE_LIMIT")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(500);
+    let max_retries = std::env::var("SES_SYNC_MAX_RETRIES")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(3);
+    ses_api::SesClient::new(base_url, api_key, page_limit, max_retries)
+}
+
+#[Object]
+impl<A: App + HasDb + Send + Sync + 'static> QueryRoot<A> {
+    #[graphql(guard = "AuthGuard::new(AuthRequirement::UserOrSession)")]
+    async fn user(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "ID for the user to look up")] id: Option<ID>,
+    ) -> Result<User<A>> {
+        let auth = ctx.data_opt::<AuthInfo>();
+        let user_id = match id {
+            Some(id) => id.to_string(),
+            None => match auth {
+                Some(AuthInfo::User { id, .. }) => id.to_string(),
+                Some(AuthInfo::Session { .. }) | Some(AuthInfo::ApiToken { .. }) => {
+                    return Err(anyhow!("Sessions cannot query without user ID"));
+                }
+                None => {
+                    return Err(anyhow!("Cannot query without user ID if not logged in"));
+                }
+            },
+        };
+
+        if user_id.is_empty() {
+            return Err(anyhow!("User ID cannot be empty"));
+        }
+
+        let loader = ctx.data_unchecked::<DataLoader<DatabaseLoader<A>>>();
+        let rec = loader
+            .load_one(UserId(ID(user_id.clone())))
+            .await
+            .map_err(|e| anyhow!("Failed to load user via DataLoader: {}", e))?
+            .flatten()
+            .ok_or_else(|| anyhow!("User with ID {} missing", &user_id))?;
+
+        Ok(rec)
+    }
+
+    #[graphql(guard = "AuthGuard::new(AuthRequirement::UserOrSession)")]
+    async fn location(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "ID for the location to look up")] id: ID,
+    ) -> Result<Location<A>> {
+        if id.is_empty() {
+            return Err(anyhow!("Location ID cannot be empty"));
+        }
+
+        let loader = ctx.data_unchecked::<DataLoader<DatabaseLoader<A>>>();
+        let rec = loader
+            .load_one(LocationId(id.clone()))
+            .await
+            .map_err(|e| anyhow!("Failed to load location via DataLoader: {}", e))?
+            .flatten()
+            .ok_or_else(|| anyhow!("Location with ID {:?} missing", &id))?;
+
+        Ok(rec)
+    }
+
+    #[graphql(guard = "AuthGuard::new(AuthRequirement::UserOrSession)")]
+    async fn person(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "ID for the person to look up")] id: ID,
+    ) -> Result<Person<A>> {
+        if id.is_empty() {
+            return Err(anyhow!("Person ID cannot be empty"));
+        }
+
+        let loader = ctx.data_unchecked::<DataLoader<DatabaseLoader<A>>>();
+        let rec = loader
+            .load_one(PersonId(id.clone()))
+            .await
+            .map_err(|e| anyhow!("Failed to load person via DataLoader: {}", e))?
+            .flatten()
+            .ok_or_else(|| anyhow!("Person with ID {:?} missing", &id))?;
+
+        Ok(rec)
+    }
+
+    #[graphql(guard = "AuthGuard::new(AuthRequirement::UserOrSession)")]
+    async fn period(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "ID for the period to look up")] id: ID,
+    ) -> Result<Period<A>> {
+        if id.is_empty() {
+            return Err(anyhow!("Period ID cannot be empty"));
+        }
+        let app = ctx.data_unchecked::<Arc<A>>().clone();
+        let rec = app
+            .db()
+            .get_periods(&[&id])
+            .await?
+            .into_iter()
+            .next()
+            .flatten()
+            .ok_or_else(|| anyhow!("Period with ID {:?} missing", &id))?;
+        require_location_access(ctx, &rec.location_id)?;
+        Ok(Period::new(rec))
+    }
+
+    #[graphql(guard = "AuthGuard::new(AuthRequirement::UserOrSession)")]
+    async fn session(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "ID for the session to look up")] id: Option<ID>,
+    ) -> Result<Session<A>> {
+        let auth = ctx.data_opt::<AuthInfo>();
+        let session_id = match id {
+            Some(id) => id.to_string(),
+            None => match auth {
+                Some(AuthInfo::Session { id, .. }) => id.to_string(),
+                Some(AuthInfo::User { .. }) | Some(AuthInfo::ApiToken { .. }) => {
+                    return Err(anyhow!("Cannot query without session ID"));
+                }
+                None => {
+                    return Err(anyhow!("Cannot query without session ID if not logged in"));
+                }
+            },
+        };
+
+        if session_id.is_empty() {
+            return Err(anyhow!("Session ID cannot be empty"));
+        }
+        let app = ctx.data_unchecked::<Arc<A>>().clone();
+        let rec = app
+            .db()
+            .get_sessions(&[&session_id])
+            .await?
+            .into_iter()
+            .next()
+            .flatten()
+            .ok_or_else(|| anyhow!("Session with ID {:?} missing", &session_id))?;
+        require_location_access(ctx, &rec.location_id)?;
+        Ok(Session::new(rec))
+    }
+
+    #[graphql(guard = "AuthGuard::new(AuthRequirement::Session)")]
+    async fn refresh_token(&self, ctx: &Context<'_>) -> Result<String> {
+        let session_id = match ctx.data_opt::<AuthInfo>() {
+            Some(AuthInfo::Session { id, .. }) => id,
+            _ => return Err(anyhow!("Cannot refresh token without session auth")),
+        };
+
+        let app = ctx.data_unchecked::<Arc<A>>().clone();
+        auth::issue_token_for_session_id(&*app, session_id)
+    }
+
+    #[graphql(guard = "AuthGuard::new(AuthRequirement::UserOrSession)")]
+    async fn category(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "ID for the category to look up")] id: ID,
+    ) -> Result<Category<A>> {
+        if id.is_empty() {
+            return Err(anyhow!("Category ID cannot be empty"));
+        }
+        let loader = ctx.data_unchecked::<DataLoader<DatabaseLoader<A>>>();
+        let item = loader
+            .load_one(CategoryId(id.clone()))
+            .await
+            .map_err(|e| anyhow!("Failed to load category via DataLoader: {}", e))?
+            .flatten()
+            .ok_or_else(|| anyhow!("Category with ID {:?} missing", &id))?;
+
+        Ok(item)
+    }
+
+    #[graphql(guard = "AuthGuard::new(AuthRequirement::SuperUser)")]
+    async fn locations(&self, ctx: &Context<'_>) -> Result<Vec<Location<A>>> {
+        let app = ctx.data_unchecked::<Arc<A>>();
+        let items = app
+            .db()
+            .list_locations(crate::db::ListLocationsFilter::EnabledOnly)
+            .await?;
+
+        Ok(items.into_iter().map(|rec| Location::new_db(rec)).collect())
+    }
+    #[graphql(guard = "AuthGuard::new(AuthRequirement::SuperUser)")]
+    async fn users(&self, ctx: &Context<'_>) -> Result<Vec<User<A>>> {
+        let app = ctx.data_unchecked::<Arc<A>>();
+        let items = app.db().list_users().await?;
+        Ok(items.into_iter().map(|rec| User::new(rec)).collect())
+    }
+
+    #[graphql(guard = "AuthGuard::new(AuthRequirement::UserOrSession)")]
+    async fn categories(&self, ctx: &Context<'_>) -> Result<Vec<Category<A>>> {
+        let app = ctx.data_unchecked::<Arc<A>>();
+        let items = app.db().list_categories().await?;
+        Ok(items.into_iter().map(Category::new).collect())
+    }
+
+    #[graphql(guard = "AuthGuard::new(AuthRequirement::SuperUser)")]
+    async fn nitc_groups(&self, ctx: &Context<'_>) -> Result<Vec<NitcGroup>> {
+        let app = ctx.data_unchecked::<Arc<A>>();
+        let items = app.db().list_nitc_groups().await?;
+        Ok(items.into_iter().map(NitcGroup).collect())
+    }
+
+    #[graphql(guard = "AuthGuard::new(AuthRequirement::SuperUser)")]
+    async fn nitc_group(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "ID for the NITC group to look up")] id: ID,
+    ) -> Result<NitcGroup> {
+        let app = ctx.data_unchecked::<Arc<A>>();
+        app.db()
+            .get_nitc_group(&id)
+            .await?
+            .map(NitcGroup)
+            .ok_or_else(|| anyhow!("NitcGroup with ID {:?} not found", &id))
+    }
+
+    #[graphql(guard = "AuthGuard::new(AuthRequirement::SuperUser)")]
+    async fn api_tokens(&self, ctx: &Context<'_>) -> Result<Vec<ApiToken>> {
+        let app = ctx.data_unchecked::<Arc<A>>();
+        let items = app.db().list_api_tokens().await?;
+        Ok(items.into_iter().map(ApiToken::new).collect())
+    }
+
+    #[graphql(guard = "AuthGuard::new(AuthRequirement::SuperUser)")]
+    async fn api_token(&self, ctx: &Context<'_>, id: ID) -> Result<ApiToken> {
+        let app = ctx.data_unchecked::<Arc<A>>();
+        let rec = app
+            .db()
+            .get_api_token(&id)
+            .await?
+            .ok_or_else(|| anyhow!("ApiToken with ID {:?} not found", &id))?;
+        Ok(ApiToken::new(rec))
+    }
+
+    #[graphql(
+        name = "ses_headquarters",
+        guard = "AuthGuard::new(AuthRequirement::SuperUser)"
+    )]
+    async fn ses_headquarters(&self) -> Result<Vec<SesHeadquarters>> {
+        let ses_client = make_ses_client()?;
+        let headquarters = ses_client.list_headquarters_cached().await?;
+        Ok(headquarters
+            .iter()
+            .filter_map(|hq| {
+                if hq.id.is_none() {
+                    warn!("Skipping SES headquarters with null id: {}", hq);
+                    return None;
+                }
+                Some(SesHeadquarters::new(hq.clone()))
+            })
+            .collect())
+    }
+
+    #[graphql(
+        name = "ses_nonincident_types",
+        guard = "AuthGuard::new(AuthRequirement::SuperUser)"
+    )]
+    async fn ses_nonincident_types(&self) -> Result<Vec<String>> {
+        let ses_client = make_ses_client()?;
+        let types = ses_client.fetch_nonincident_types_cached().await?;
+        Ok((*types).clone())
+    }
+
+    #[graphql(
+        name = "ses_nonincident_tags",
+        guard = "AuthGuard::new(AuthRequirement::SuperUser)"
+    )]
+    async fn ses_nonincident_tags(&self) -> Result<Vec<SesNonIncidentTag>> {
+        let ses_client = make_ses_client()?;
+        let tags = ses_client.fetch_nonincident_tags_cached().await?;
+        let mut result: Vec<SesNonIncidentTag> = tags
+            .values()
+            .map(|t| SesNonIncidentTag {
+                id: t.id,
+                name: t.name.clone(),
+                primary_activity_name: t.primary_activity_name.clone(),
+            })
+            .collect();
+        result.sort_by_key(|t| t.id);
+        Ok(result)
+    }
+
+    #[graphql(
+        name = "ses_participant_types",
+        guard = "AuthGuard::new(AuthRequirement::SuperUser)"
+    )]
+    async fn ses_participant_types(&self) -> Result<Vec<String>> {
+        let ses_client = make_ses_client()?;
+        let types = ses_client.fetch_participant_types_cached().await?;
+        Ok((*types).clone())
+    }
+}

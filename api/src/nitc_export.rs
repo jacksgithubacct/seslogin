@@ -1,0 +1,734 @@
+use anyhow::{Context, Result, anyhow};
+use aws_config::BehaviorVersion;
+use aws_sdk_sqs::Client as SqsClient;
+use chrono_tz::Australia::Sydney;
+use std::collections::HashMap;
+use tracing::{info, warn};
+
+use crate::db;
+use crate::ses_api::{
+    SesClient, SesNonIncidentCreate, SesNonIncidentUpdate, SesParticipantUpsert, SesPersonRef,
+    SesTagRef,
+};
+use crate::sqs_dispatch;
+
+#[derive(Debug, Clone)]
+pub struct NitcConfig {
+    pub dry_run: bool,
+    pub ses_api_base_url: String,
+    pub ses_api_key: String,
+    pub nitc_queue_url: String,
+    pub max_retries: usize,
+}
+
+#[derive(Debug, Clone)]
+pub enum PeriodAssignOutcome {
+    Assigned(String),
+    /// Period is not NITC-eligible (no category, category/location not NITC-enabled, or open with no participant).
+    Skipped,
+    /// Period's nitc_exported_version >= version — already fully exported, nothing to do.
+    AlreadySynced,
+}
+
+#[derive(Debug, Clone)]
+pub enum EventSyncOutcome {
+    Synced(i64),
+    /// Message version doesn't match the event's current version — a newer change is pending.
+    Stale,
+    /// event was already synced at this version or later — nothing to do.
+    AlreadySynced,
+    NoLivePeriods,
+    Skipped,
+}
+
+fn make_event_name(category_name: Option<&str>) -> String {
+    let name = category_name.unwrap_or("unknown");
+    let compressed = name.replace(" - ", "-");
+    format!("SESLOGIN: {}", compressed)
+}
+
+pub struct SqsClients {
+    pub client: SqsClient,
+    pub queue_url: String,
+}
+
+pub struct NitcClients<D: db::Handler> {
+    pub db: D,
+    pub ses: SesClient,
+    pub sqs: SqsClients,
+}
+
+pub async fn make_dynamodb_clients(
+    config: &NitcConfig,
+    db_prefix: String,
+) -> Result<NitcClients<crate::dynamodb::Handler>> {
+    let db = crate::dynamodb::Handler::new(&db_prefix, false).await;
+    let ses = SesClient::new(
+        config.ses_api_base_url.clone(),
+        config.ses_api_key.clone(),
+        100,
+        config.max_retries,
+    )?;
+    let aws_cfg = aws_config::load_defaults(BehaviorVersion::latest()).await;
+    let sqs = SqsClients {
+        client: SqsClient::new(&aws_cfg),
+        queue_url: config.nitc_queue_url.clone(),
+    };
+    Ok(NitcClients { db, ses, sqs })
+}
+
+fn unix_to_sydney_rfc3339(unix: u64) -> String {
+    let utc =
+        chrono::DateTime::from_timestamp(unix as i64, 0).unwrap_or(chrono::DateTime::UNIX_EPOCH);
+    utc.with_timezone(&Sydney).to_rfc3339()
+}
+
+fn unix_to_sydney_date(unix: u64) -> chrono::NaiveDate {
+    let utc =
+        chrono::DateTime::from_timestamp(unix as i64, 0).unwrap_or(chrono::DateTime::UNIX_EPOCH);
+    utc.with_timezone(&Sydney).date_naive()
+}
+
+// ── Phase 1: Period assignment ────────────────────────────────────────────────
+
+/// Phase 1: assign a period to the correct nitc_events DB row (creating if needed),
+/// bump the event version, and enqueue a delayed event_sync SQS message for each
+/// affected event. Returns Skipped if the period is not NITC-eligible.
+pub async fn assign_period<D: db::Handler>(
+    period_id: &str,
+    config: &NitcConfig,
+    clients: &NitcClients<D>,
+) -> Result<PeriodAssignOutcome> {
+    // Fetch and validate the period + its category + location for NITC eligibility
+    let Some(period) = clients
+        .db
+        .get_periods(&[period_id])
+        .await?
+        .into_iter()
+        .next()
+        .flatten()
+    else {
+        return Ok(PeriodAssignOutcome::Skipped);
+    };
+
+    let Some(category_id) = &period.category_id else {
+        return Ok(PeriodAssignOutcome::Skipped);
+    };
+
+    let Some(category) = clients
+        .db
+        .get_categories(&[category_id])
+        .await?
+        .into_iter()
+        .next()
+        .flatten()
+    else {
+        return Ok(PeriodAssignOutcome::Skipped);
+    };
+
+    let Some(nitc_group_id) = category.nitc_group_id else {
+        return Ok(PeriodAssignOutcome::Skipped);
+    };
+
+    let location = clients
+        .db
+        .get_locations(&[&period.location_id])
+        .await?
+        .into_iter()
+        .next()
+        .flatten();
+    let Some(nitc_cutover) = location.as_ref().and_then(|l| l.nitc_enabled) else {
+        return Ok(PeriodAssignOutcome::Skipped);
+    };
+    if location
+        .as_ref()
+        .and_then(|l| l.ses_api_headquarters_id.as_ref())
+        .is_none()
+    {
+        return Ok(PeriodAssignOutcome::Skipped);
+    }
+    if period.start_time < nitc_cutover {
+        return Ok(PeriodAssignOutcome::Skipped);
+    }
+
+    // Skip open periods that have no participant to clean up
+    if period.end_time.is_none() && period.nitc_participant_id.is_none() {
+        if !config.dry_run {
+            clients
+                .db
+                .set_period_nitc_exported_version(period_id, period.version)
+                .await?;
+        }
+        return Ok(PeriodAssignOutcome::Skipped);
+    }
+
+    if period.nitc_exported_version >= Some(period.version) {
+        return Ok(PeriodAssignOutcome::AlreadySynced);
+    }
+
+    let event_date = unix_to_sydney_date(period.start_time);
+
+    if config.dry_run {
+        let existing = clients
+            .db
+            .get_nitc_event_for_day(&period.location_id, &nitc_group_id, event_date)
+            .await?;
+        match &existing {
+            Some(r) => info!(
+                "[dry-run] Would assign period {} to existing NITC event {} (location={}, nitc_group={}, date={})",
+                period_id, r.id, period.location_id, nitc_group_id, event_date
+            ),
+            None => info!(
+                "[dry-run] Would create and assign period {} to new NITC event (location={}, nitc_group={}, date={})",
+                period_id, period.location_id, nitc_group_id, event_date
+            ),
+        }
+        if let Some(ref old_event_id) = period.nitc_event_id
+            && existing.as_ref().map(|r| &r.id) != Some(old_event_id)
+        {
+            info!(
+                "[dry-run] Would move period {} from event {} (old event's Phase 2 will omit the participant)",
+                period_id, old_event_id
+            );
+        }
+        return Ok(PeriodAssignOutcome::Assigned(
+            existing.map_or_else(String::new, |r| r.id),
+        ));
+    }
+
+    let desired_event = clients
+        .db
+        .get_or_create_nitc_event_for_day(&period.location_id, &nitc_group_id, event_date)
+        .await?;
+
+    let mut events_to_sync: Vec<(String, u64)> = Vec::new();
+
+    // Handle category/date change: the period was previously on a different event
+    if let Some(old_event_id) = period.nitc_event_id {
+        if old_event_id != desired_event.id {
+            // Bump the version of the event the period is moving off so that the participant gets
+            // removed and the start/end times get recalculated.
+            let old_version = clients.db.bump_nitc_event_version(&old_event_id).await?;
+            events_to_sync.push((old_event_id, old_version));
+
+            // Reassign period to the new event
+            clients
+                .db
+                .set_period_nitc_event(period_id, &desired_event.id)
+                .await?;
+        }
+    } else {
+        // First-time assignment
+        clients
+            .db
+            .set_period_nitc_event(period_id, &desired_event.id)
+            .await?;
+    }
+
+    // Bump the desired event's version
+    let new_version = clients
+        .db
+        .bump_nitc_event_version(&desired_event.id)
+        .await?;
+    events_to_sync.push((desired_event.id.clone(), new_version));
+
+    for (event_id, version) in events_to_sync {
+        sqs_dispatch::enqueue_nitc_event_export(
+            &clients.sqs.client,
+            &clients.sqs.queue_url,
+            &event_id,
+            version,
+        )
+        .await?;
+    }
+
+    clients
+        .db
+        .set_period_nitc_exported_version(period_id, period.version)
+        .await?;
+
+    Ok(PeriodAssignOutcome::Assigned(desired_event.id))
+}
+
+// ── Backfill: scan for unsynced periods and enqueue them ─────────────────────
+
+#[derive(Debug, Default)]
+pub struct BackfillStats {
+    pub locations_checked: usize,
+    pub periods_enqueued: usize,
+    pub periods_already_synced: usize,
+    pub periods_skipped_no_nitc_category: usize,
+}
+
+/// Scan all NITC-enabled locations (or a single location if `location_id_filter` is given)
+/// for periods that are not yet exported (`nitc_exported_version < version`) and enqueue
+/// a Phase 1 SQS message for each one. Periods with no category or a category without a
+/// nitc_group_id are skipped.
+pub async fn backfill_unsynced_periods<D: db::Handler>(
+    location_id_filter: Option<&str>,
+    config: &NitcConfig,
+    clients: &NitcClients<D>,
+) -> Result<BackfillStats> {
+    let locations: Vec<db::Location> = if let Some(loc_id) = location_id_filter {
+        clients
+            .db
+            .get_locations(&[loc_id])
+            .await?
+            .into_iter()
+            .flatten()
+            .collect()
+    } else {
+        clients
+            .db
+            .list_locations(crate::db::ListLocationsFilter::EnabledOnly)
+            .await?
+    };
+
+    // Build a set of category IDs that are NITC-eligible (have nitc_group_id set).
+    let nitc_category_ids: std::collections::HashSet<String> = clients
+        .db
+        .list_categories()
+        .await?
+        .into_iter()
+        .filter(|c| c.nitc_group_id.is_some())
+        .map(|c| c.id)
+        .collect();
+
+    let mut stats = BackfillStats::default();
+
+    for location in &locations {
+        let Some(nitc_cutover) = location.nitc_enabled else {
+            continue;
+        };
+        stats.locations_checked += 1;
+        info!(
+            "Scanning location {} ({}) for unsynced periods since {}",
+            location.id, location.name, nitc_cutover
+        );
+
+        let mut after_cursor: Option<db::PeriodCursor> = None;
+        loop {
+            let page = db::ListPeriodsPage {
+                after: after_cursor.clone(),
+                before: None,
+                limit: 500,
+                descending: false,
+            };
+            let batch = clients
+                .db
+                .list_periods_for_location(
+                    &location.id,
+                    false,
+                    Some((nitc_cutover, u64::MAX)),
+                    page,
+                )
+                .await?;
+            let done = batch.len() < 500;
+            after_cursor = batch.last().map(|p| db::PeriodCursor {
+                id: p.id.clone(),
+                start_time: p.start_time,
+            });
+
+            for period in &batch {
+                let has_nitc_category = period
+                    .category_id
+                    .as_ref()
+                    .is_some_and(|id| nitc_category_ids.contains(id));
+                if !has_nitc_category {
+                    stats.periods_skipped_no_nitc_category += 1;
+                    continue;
+                }
+                if period.nitc_exported_version >= Some(period.version) {
+                    stats.periods_already_synced += 1;
+                    continue;
+                }
+                if config.dry_run {
+                    info!(
+                        "[dry-run] Would enqueue period {} (location={}, version={}, nitc_exported_version={:?})",
+                        period.id, location.id, period.version, period.nitc_exported_version
+                    );
+                } else {
+                    sqs_dispatch::enqueue_period_nitc_export(
+                        &clients.sqs.client,
+                        &clients.sqs.queue_url,
+                        &period.id,
+                    )
+                    .await?;
+                    info!(
+                        "Enqueued period {} (location={}, version={}, nitc_exported_version={:?})",
+                        period.id, location.id, period.version, period.nitc_exported_version
+                    );
+                }
+                stats.periods_enqueued += 1;
+            }
+
+            if done {
+                break;
+            }
+        }
+    }
+
+    Ok(stats)
+}
+
+// ── Phase 2: event sync ──────────────────────────────────────────────────────
+
+/// Phase 2: sync a NITC event to SES if the version matches (no newer changes pending).
+pub async fn sync_nitc_event<D: db::Handler>(
+    event_id: &str,
+    expected_version: Option<u64>,
+    config: &NitcConfig,
+    clients: &NitcClients<D>,
+) -> Result<EventSyncOutcome> {
+    let Some(event) = clients.db.get_nitc_event_by_id(event_id).await? else {
+        warn!("NITC event {} not found, skipping sync", event_id);
+        return Ok(EventSyncOutcome::Skipped);
+    };
+
+    if expected_version.is_some_and(|v| event.version != v) {
+        return Ok(EventSyncOutcome::Stale);
+    }
+
+    if event.synced_version.is_some_and(|v| v >= event.version) {
+        return Ok(EventSyncOutcome::AlreadySynced);
+    }
+
+    // Fetch period IDs and then the full period records
+    let period_ids = clients.db.list_period_ids_for_nitc_event(event_id).await?;
+    let all_periods: Vec<db::Period> = clients
+        .db
+        .get_periods(&period_ids)
+        .await
+        .context("Getting periods for NITC event")?
+        .into_iter()
+        .flatten()
+        .collect();
+
+    // Batch-fetch persons and categories needed by the periods
+    let person_ids: Vec<&str> = all_periods
+        .iter()
+        .map(|p| p.person_id.as_str())
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+    let persons: HashMap<String, db::Person> = clients
+        .db
+        .get_persons(&person_ids)
+        .await
+        .context("Getting persons for NITC event")?
+        .into_iter()
+        .flatten()
+        .map(|p| (p.id.clone(), p))
+        .collect();
+
+    let category_ids: Vec<&str> = {
+        let mut seen = std::collections::HashSet::new();
+        all_periods
+            .iter()
+            .filter_map(|p| p.category_id.as_deref())
+            .filter(|&id| seen.insert(id))
+            .collect()
+    };
+    let categories: HashMap<String, db::Category> = if !category_ids.is_empty() {
+        clients
+            .db
+            .get_categories(&category_ids)
+            .await
+            .context("Getting categories for NITC event")?
+            .into_iter()
+            .flatten()
+            .map(|c| (c.id.clone(), c))
+            .collect()
+    } else {
+        HashMap::new()
+    };
+
+    let Some(location) = clients
+        .db
+        .get_locations(&[&event.location_id])
+        .await
+        .context("Getting location for NITC event")?
+        .into_iter()
+        .next()
+        .flatten()
+    else {
+        warn!(
+            "NITC event {} location {} not found, skipping sync",
+            event_id, event.location_id
+        );
+        return Ok(EventSyncOutcome::Skipped);
+    };
+
+    // Only live, ended periods are sent to SES; deleted periods are removed implicitly by
+    // their absence from the PUT participants list.
+    let live_periods: Vec<&db::Period> = all_periods
+        .iter()
+        .filter(|p| p.deleted.is_none() && p.end_time.is_some())
+        .collect();
+
+    // Validate location NITC eligibility and resolve SES HQ ID
+    if location.nitc_enabled.is_none() {
+        warn!(
+            "NITC event {} location {} not NITC-enabled, skipping sync",
+            event_id, event.location_id
+        );
+        return Ok(EventSyncOutcome::Skipped);
+    }
+    let ses_hq_id = location
+        .ses_api_headquarters_id
+        .as_ref()
+        .and_then(|s| s.parse::<i64>().ok())
+        .ok_or_else(|| {
+            anyhow!(
+                "Location {} has invalid ses_api_headquarters_id",
+                location.id
+            )
+        })?;
+    let nitc_location = location.name.clone();
+
+    // Fetch NITC group config (type, tags) from the event's nitc_group_id
+    let Some(nitc_group) = clients
+        .db
+        .get_nitc_group(&event.nitc_group_id)
+        .await
+        .context("Getting NITC group for event")?
+    else {
+        warn!(
+            "NITC event {} nitc_group {} not found, skipping sync",
+            event_id, event.nitc_group_id
+        );
+        return Ok(EventSyncOutcome::NoLivePeriods);
+    };
+    let nitc_type = nitc_group.nitc_type.clone();
+    let nitc_tags: Vec<i32> = nitc_group.nitc_tag_ids.clone();
+
+    // (period, ses_person_id) pairs for periods whose participants were successfully resolved
+    let mut resolved: Vec<(&db::Period, i64)> = Vec::new();
+
+    let (
+        event_name,
+        event_description,
+        event_start_date,
+        event_end_date,
+        event_participants,
+        event_tags,
+    ) = if live_periods.is_empty() {
+        // We can't delete NITC events in SES, so when all participants are removed we zero out the
+        // time window and participant list while keeping the type/location/tags unchanged.
+        let event_start = unix_to_sydney_rfc3339(
+            event
+                .event_date
+                .and_hms_opt(0, 0, 0)
+                .unwrap()
+                .and_utc()
+                .timestamp() as u64,
+        );
+        let event_end = unix_to_sydney_rfc3339(
+            event
+                .event_date
+                .and_hms_opt(0, 0, 1)
+                .unwrap()
+                .and_utc()
+                .timestamp() as u64,
+        );
+        (
+            "SESLOGIN - unused".to_string(),
+            "Event created by SES Activity NITC export - previously had entries but they have all been removed".to_string(),
+            event_start,
+            event_end,
+            Vec::<SesParticipantUpsert>::new(),
+            nitc_tags.iter().map(|&id| SesTagRef::new(id)).collect::<Vec<_>>(),
+        )
+    } else {
+        let min_start = live_periods.iter().map(|p| p.start_time).min().unwrap();
+        let max_end = live_periods
+            .iter()
+            .filter_map(|p| p.end_time)
+            .max()
+            .unwrap();
+
+        let start_rfc = unix_to_sydney_rfc3339(min_start);
+        let end_rfc = unix_to_sydney_rfc3339(max_end);
+
+        // Use the first live period's category for the event name and tags
+        let rep_cat = live_periods[0]
+            .category_id
+            .as_deref()
+            .and_then(|id| categories.get(id));
+        let tags: Vec<SesTagRef> = nitc_tags.iter().map(|&id| SesTagRef::new(id)).collect();
+        let event_name = make_event_name(rep_cat.map(|c| c.name.as_str()));
+
+        // Resolve ses_person_id for each live period, skipping those we can't resolve
+        for period in &live_periods {
+            let person = persons.get(&period.person_id);
+            let ses_api_person_id: Option<i64> = person
+                .and_then(|p| p.ses_api_person_id.as_deref())
+                .and_then(|s| s.parse().ok());
+            let registration_number = person.and_then(|p| p.registration_number.as_deref());
+
+            let ses_person_id = match ses_api_person_id {
+                Some(id) => id,
+                None => {
+                    let Some(registration_number) = registration_number else {
+                        warn!(
+                            "Period {} has no ses_api_person_id or registration_number, skipping participant sync",
+                            period.id
+                        );
+                        continue;
+                    };
+                    if config.dry_run {
+                        info!(
+                            "[dry-run] Would look up SES person for period {} via registration number {}",
+                            period.id, registration_number
+                        );
+                        continue;
+                    }
+                    let Some(ses_person) = clients
+                        .ses
+                        .fetch_person_by_registration_number(registration_number)
+                        .await?
+                    else {
+                        warn!(
+                            "Period {} member {} not found in SES API, skipping participant sync",
+                            period.id, registration_number
+                        );
+                        continue;
+                    };
+                    let Some(id) = ses_person.id else {
+                        warn!(
+                            "Period {} member {} SES API response has no id, skipping participant sync",
+                            period.id, registration_number
+                        );
+                        continue;
+                    };
+                    id
+                }
+            };
+            resolved.push((period, ses_person_id));
+        }
+
+        let participants: Vec<SesParticipantUpsert> = resolved
+            .iter()
+            .map(|(period, ses_person_id)| {
+                let nitc_participant_type = period
+                    .category_id
+                    .as_deref()
+                    .and_then(|id| categories.get(id))
+                    .and_then(|c| c.nitc_participant_type.clone())
+                    .unwrap_or_default();
+                SesParticipantUpsert {
+                    id: period.nitc_participant_id,
+                    participant_type: nitc_participant_type,
+                    start_date: unix_to_sydney_rfc3339(period.start_time),
+                    end_date: unix_to_sydney_rfc3339(period.end_time.unwrap()),
+                    person: SesPersonRef { id: *ses_person_id },
+                }
+            })
+            .collect();
+
+        (
+            event_name,
+            "Event created by SES Activity NITC export".to_string(),
+            start_rfc,
+            end_rfc,
+            participants,
+            tags,
+        )
+    };
+
+    if config.dry_run {
+        info!(
+            "[dry-run] Would {} NITC event {} (ses_id={:?}) with {} participants",
+            if event.ses_api_nitc_id.is_none() {
+                "create+update"
+            } else {
+                "update"
+            },
+            event_id,
+            event.ses_api_nitc_id,
+            event_participants.len()
+        );
+        return Ok(EventSyncOutcome::Synced(event.ses_api_nitc_id.unwrap_or(0)));
+    }
+
+    let ses_nitc_id = if let Some(existing_id) = event.ses_api_nitc_id {
+        existing_id
+    } else {
+        let create_body = SesNonIncidentCreate {
+            name: event_name.clone(),
+            description: event_description.clone(),
+            nitc_type: nitc_type.clone(),
+            location: nitc_location.clone(),
+            start_date: event_start_date.clone(),
+            end_date: event_end_date.clone(),
+            tags: event_tags.clone(),
+        };
+        let new_id = clients
+            .ses
+            .create_nitc_event(ses_hq_id, &create_body)
+            .await?;
+        // make sure this happens immediately after we ge the new ID from the SES API
+        // because we don't want to end up hitting an error and retrying the above create call,
+        // which would result in multiple NITC events being created in SES for the same event.
+        clients.db.set_nitc_event_ses_id(event_id, new_id).await?;
+        new_id
+    };
+
+    let result = clients
+        .ses
+        .update_nitc_event(
+            ses_hq_id,
+            &SesNonIncidentUpdate {
+                id: ses_nitc_id,
+                name: event_name,
+                description: event_description,
+                nitc_type,
+                location: nitc_location,
+                start_date: event_start_date,
+                end_date: event_end_date,
+                participants: event_participants,
+                tags: event_tags,
+                completed: true,
+            },
+        )
+        .await?;
+
+    // Match returned participants back to periods by person_id to store participant IDs
+    let participant_by_person: HashMap<i64, i64> = result
+        .participants
+        .into_iter()
+        .filter_map(|p| p.person.map(|person| (person.id, p.id)))
+        .collect();
+
+    for (period, ses_person_id) in &resolved {
+        let Some(&participant_id) = participant_by_person.get(ses_person_id) else {
+            warn!(
+                "Period {} person {} not found in SES upsert response, participant ID not stored",
+                period.id, ses_person_id
+            );
+            continue;
+        };
+        clients
+            .db
+            .update_period_nitc_exported(&period.id, event_id, participant_id, period.version)
+            .await?;
+    }
+
+    // Clear DB state for deleted periods whose participants were removed from SES implicitly
+    for period in all_periods
+        .iter()
+        .filter(|p| p.deleted.is_some() && p.nitc_participant_id.is_some())
+    {
+        clients
+            .db
+            .clear_period_nitc_participant(&period.id, period.version)
+            .await?;
+    }
+
+    clients
+        .db
+        .mark_nitc_event_synced(event_id, event.version)
+        .await?;
+
+    Ok(EventSyncOutcome::Synced(ses_nitc_id))
+}

@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 200 200" role="img" aria-label="orange square grid logo">
+  <g fill="#EF7229">
+    <rect x="0" y="0" width="25" height="25" />
+    <rect x="25" y="0" width="50" height="25" />
+    <rect x="75" y="0" width="50" height="25" />
+    <rect x="125" y="0" width="50" height="25" />
+    <rect x="175" y="0" width="25" height="25" />
+
+    <rect x="0" y="25" width="25" height="50" />
+    <rect x="25" y="25" width="50" height="50" fill="#FFFFFF" />
+    <rect x="75" y="25" width="50" height="50" />
+    <rect x="125" y="25" width="50" height="50" fill="#FFFFFF" />
+    <rect x="175" y="25" width="25" height="50" />
+
+    <rect x="0" y="75" width="25" height="50" />
+    <rect x="25" y="75" width="50" height="50" />
+    <rect x="75" y="75" width="50" height="50" fill="#FFFFFF" />
+    <rect x="125" y="75" width="50" height="50" />
+    <rect x="175" y="75" width="25" height="50" />
+
+    <rect x="0" y="125" width="25" height="50" />
+    <rect x="25" y="125" width="50" height="50" fill="#FFFFFF" />
+    <rect x="75" y="125" width="50" height="50" />
+    <rect x="125" y="125" width="50" height="50" fill="#FFFFFF" />
+    <rect x="175" y="125" width="25" height="50" />
+
+    <rect x="0" y="175" width="25" height="25" />
+    <rect x="25" y="175" width="50" height="25" />
+    <rect x="75" y="175" width="50" height="25" />
+    <rect x="125" y="175" width="50" height="25" />
+    <rect x="175" y="175" width="25" height="25" />
+  </g>
+</svg>

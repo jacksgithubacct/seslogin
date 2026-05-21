@@ -1,0 +1,75 @@
+import { useMutation, graphql } from "react-relay";
+import { useNavigate } from "react-router";
+import { type LocationNewMutation } from "./__generated__/LocationNewMutation.graphql";
+
+export default function LocationNew() {
+  const [commitMutation, isMutationInFlight] = useMutation<LocationNewMutation>(
+    graphql`
+      mutation LocationNewMutation($name: String!, $nitcEnabled: Int) {
+        createLocation(name: $name, nitcEnabled: $nitcEnabled) {
+          id
+          ...LocationList_item
+        }
+      }
+    `,
+  );
+  const navigate = useNavigate();
+
+  async function handleSubmit(formData: FormData) {
+    const name = formData.get("name")?.toString() || "";
+    const nitcEnabledDate = formData.get("nitcEnabled")?.toString() || "";
+    const nitcEnabled = nitcEnabledDate
+      ? Math.floor(new Date(nitcEnabledDate + "T00:00:00Z").getTime() / 1000)
+      : null;
+
+    await new Promise((resolve, reject) => {
+      commitMutation({
+        variables: { name, nitcEnabled },
+        onCompleted: (data) => {
+          resolve(data);
+        },
+        onError: (err) => {
+          reject(err);
+        },
+        updater: (store) => {
+          store.invalidateStore();
+        },
+      });
+    });
+
+    // this should only happen if no error was thrown
+    navigate("/admin/locations");
+  }
+
+  return (
+    <>
+      <p>Enter the details of the new location in the form below.</p>
+      {/* {error && <p className="error">Error: {error.message}</p>} */}
+
+      <form action={handleSubmit}>
+        <dl>
+          <dt>
+            <label htmlFor="name" className="required">
+              Name
+            </label>
+          </dt>
+          <dd>
+            <input type="text" name="name" id="name" required />
+          </dd>
+          <dt>
+            <label htmlFor="nitcEnabled">NITC Export</label>
+          </dt>
+          <dd>
+            <input type="checkbox" name="nitcEnabled" id="nitcEnabled" />
+          </dd>
+          <dt>&nbsp;</dt>
+          <dd>
+            <button type="submit" disabled={isMutationInFlight}>
+              Save
+            </button>
+          </dd>
+        </dl>
+      </form>
+    </>
+  );
+}

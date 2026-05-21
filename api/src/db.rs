@@ -1,0 +1,610 @@
+use chrono::NaiveDate;
+use std::future::Future;
+use thiserror::Error;
+
+/// these errors are separated into groups because we want to handle them differently
+#[derive(Error, Debug)]
+pub enum Error {
+    /// returned when a queried record does not exist
+    #[error("Record not found: {0}")]
+    NotFound(String),
+    /// returned when a DB row cannot be deserialized into the expected type
+    #[error("Hydration error: {0}")]
+    Hydration(String),
+    /// this is an unexpected error, probably fine to ignore and retry
+    #[error("Infrastructure error: {0}")]
+    Infrastructure(String),
+    /// returned when a row violates an expected data-integrity invariant
+    #[error("Data integrity error: {0}")]
+    Integrity(String),
+    /// type conversion error ie convert string ID to integer
+    #[error("Data type conversion error: {0}")]
+    TypeConversion(String),
+    #[error("Mutation disabled")]
+    MutationDisabled,
+}
+
+pub type Result<T> = std::result::Result<T, Error>;
+
+pub enum ListSessionsQuery {
+    ByLocation(String),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PeriodCursor {
+    pub start_time: u64,
+    pub id: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ListPeriodsPage {
+    pub after: Option<PeriodCursor>,
+    pub before: Option<PeriodCursor>,
+    pub limit: i32,
+    pub descending: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct TestPaginationRow {
+    pub id: String,
+    pub group_id: i64,
+    pub number: i64,
+    pub name: String,
+    pub odd: Option<i64>,
+    pub even: Option<String>,
+    pub mod5: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TestPaginationFilter {
+    OddOnly,
+    EvenOnly,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TestPaginationCursor {
+    pub number: i64,
+    pub id: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ListTestPaginationPage {
+    pub after: Option<TestPaginationCursor>,
+    pub before: Option<TestPaginationCursor>,
+    pub limit: i32,
+    /// true → scan descending (highest number first); false → ascending
+    pub descending: bool,
+    pub filter: Option<TestPaginationFilter>,
+}
+
+pub trait HasID {
+    fn id(&self) -> &str;
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct User {
+    pub id: String,
+    pub email: Option<String>,
+    pub is_super: bool,
+    pub is_dev: bool,
+    pub deleted: bool,
+    pub location_grants: Vec<String>,
+    pub access_time: Option<u64>,
+    pub email_config: serde_json::Map<String, serde_json::Value>,
+}
+
+impl HasID for User {
+    fn id(&self) -> &str {
+        &self.id
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum UserUpdateShape<'a> {
+    Fields {
+        email: &'a str,
+        is_super: bool,
+        is_dev: bool,
+        deleted: bool,
+        location_grants: Vec<String>,
+    },
+    AccessTime,
+    EmailConfig {
+        email_config: serde_json::Map<String, serde_json::Value>,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Person {
+    pub id: String,
+    pub location_id: String,
+    pub first_name: String,
+    pub last_name: String,
+    pub registration_number: Option<String>,
+    pub ses_api_person_id: Option<String>,
+    pub deleted: Option<u64>,
+}
+
+impl HasID for Person {
+    fn id(&self) -> &str {
+        &self.id
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PersonUpdateShape<'a> {
+    Fields {
+        first_name: &'a str,
+        last_name: &'a str,
+        registration_number: &'a str,
+    },
+    Location {
+        location_id: &'a str,
+    },
+    SesApiPersonId {
+        ses_api_person_id: Option<&'a str>,
+    },
+    Undelete,
+    Delete,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Session {
+    pub id: String,
+    pub name: String,
+    pub location_id: String,
+    pub last_contact: Option<u64>,
+    pub client_version: Option<String>,
+    pub code: Option<String>,
+    pub config: serde_json::Map<String, serde_json::Value>,
+    pub healthcheck_url: Option<String>,
+    pub legacy_id: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ApiToken {
+    pub id: String,
+    pub name: String,
+    pub token_hash: String,
+    pub location_grants: Vec<String>,
+    pub read_only: bool,
+    pub created_at: u64,
+    pub created_by_user_id: String,
+    pub expires_at: Option<u64>,
+    pub revoked_at: Option<u64>,
+    pub last_used_at: Option<u64>,
+}
+
+impl HasID for ApiToken {
+    fn id(&self) -> &str {
+        &self.id
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ApiTokenUpdateShape<'a> {
+    Fields {
+        name: &'a str,
+        location_grants: Vec<String>,
+        read_only: bool,
+        expires_at: Option<u64>,
+    },
+    TouchLastUsed,
+    Revoke,
+}
+
+impl HasID for Session {
+    fn id(&self) -> &str {
+        &self.id
+    }
+}
+
+pub enum LocationUpdateShape<'a> {
+    Fields {
+        name: &'a str,
+        enabled: bool,
+        nitc_enabled: Option<u64>,
+    },
+    LastSyncTime {
+        time: u64,
+    },
+    Name {
+        name: &'a str,
+    },
+}
+
+pub enum ListLocationsFilter {
+    EnabledOnly,
+    All,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum SessionUpdateShape<'a> {
+    Fields {
+        name: &'a str,
+        config: &'a serde_json::Map<String, serde_json::Value>,
+        healthcheck_url: Option<&'a str>,
+    },
+    Info {
+        client_version: Option<&'a str>,
+    },
+    Delete,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Period {
+    pub id: String,
+    pub person_id: String,
+    pub location_id: String,
+    pub category_id: Option<String>,
+    pub start_time: u64,
+    pub end_time: Option<u64>,
+    pub version: u64,
+    pub nitc_event_id: Option<String>,
+    pub nitc_participant_id: Option<i64>,
+    pub nitc_exported_version: Option<u64>,
+    pub deleted: Option<u64>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct NitcEvent {
+    pub id: String,
+    pub location_id: String,
+    pub nitc_group_id: String,
+    pub event_date: NaiveDate,
+    pub ses_api_nitc_id: Option<i64>,
+    pub version: u64,
+    pub synced_version: Option<u64>,
+}
+
+/// NITC topic group configuration: type, tags. Location fields are fetched separately.
+#[derive(Clone, Debug)]
+pub struct NitcGroup {
+    pub id: String,
+    pub nitc_type: String,
+    pub nitc_tag_ids: Vec<i32>,
+}
+
+impl HasID for NitcGroup {
+    fn id(&self) -> &str {
+        &self.id
+    }
+}
+
+impl HasID for Period {
+    fn id(&self) -> &str {
+        &self.id
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PeriodUpdateShape<'a> {
+    Fields {
+        person_id: &'a str,
+        location_id: &'a str,
+        category_id: &'a str,
+        start_time: i64,
+        end_time: i64,
+    },
+    TimeCategory {
+        start_time: i64,
+        end_time: i64,
+        category_id: &'a str,
+    },
+    Delete,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Location {
+    pub id: String,
+    pub name: String,
+    pub enabled: bool,
+    pub nitc_enabled: Option<u64>,
+    pub ses_api_headquarters_id: Option<String>,
+    pub last_successful_member_sync: Option<u64>,
+}
+
+impl HasID for Location {
+    fn id(&self) -> &str {
+        &self.id
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Category {
+    pub id: String,
+    pub name: String,
+    pub enabled: bool,
+    pub nitc_participant_type: Option<String>,
+    pub nitc_group_id: Option<String>,
+}
+
+impl HasID for Category {
+    fn id(&self) -> &str {
+        &self.id
+    }
+}
+
+pub trait Handler {
+    fn get_users<T: AsRef<str> + Sync>(
+        &self,
+        ids: &[T],
+    ) -> impl Future<Output = Result<Vec<Option<User>>>> + Send;
+    fn get_user_id_by_email(
+        &self,
+        email: &str,
+    ) -> impl Future<Output = Result<Option<String>>> + Send;
+    fn list_users(&self) -> impl Future<Output = Result<Vec<User>>> + Send;
+    fn create_user(
+        &self,
+        email: &str,
+        is_super: bool,
+        location_grants: Vec<String>,
+    ) -> impl Future<Output = Result<User>> + Send;
+    fn update_user(
+        &self,
+        id: &str,
+        change: UserUpdateShape<'_>,
+    ) -> impl Future<Output = Result<()>> + Send;
+    fn get_persons<T: AsRef<str> + Sync>(
+        &self,
+        ids: &[T],
+    ) -> impl Future<Output = Result<Vec<Option<Person>>>> + Send;
+    fn get_person_id_by_registration_number(
+        &self,
+        registration_number: &str,
+    ) -> impl Future<Output = Result<Option<String>>> + Send;
+    fn get_person_id_by_ses_api_person_id(
+        &self,
+        ses_api_person_id: &str,
+    ) -> impl Future<Output = Result<Option<String>>> + Send;
+    fn get_sessions<T: AsRef<str> + Sync>(
+        &self,
+        ids: &[T],
+    ) -> impl Future<Output = Result<Vec<Option<Session>>>> + Send;
+    fn get_session_by_code(
+        &self,
+        code: &str,
+    ) -> impl Future<Output = Result<Option<Session>>> + Send;
+    fn get_session_by_legacy_id(
+        &self,
+        legacy_id: &str,
+    ) -> impl Future<Output = Result<Option<Session>>> + Send;
+    fn wipe_session_code(&self, id: &str) -> impl Future<Output = Result<()>> + Send;
+    fn list_sessions(
+        &self,
+        query: ListSessionsQuery,
+    ) -> impl Future<Output = Result<Vec<Session>>> + Send;
+    fn list_people_for_location(
+        &self,
+        location_id: &str,
+        skip_deleted: bool,
+    ) -> impl Future<Output = Result<Vec<Person>>> + Send;
+    fn list_periods_for_location(
+        &self,
+        location_id: &str,
+        only_active: bool,
+        timestamp_range: Option<(u64, u64)>,
+        page: ListPeriodsPage,
+    ) -> impl Future<Output = Result<Vec<Period>>> + Send;
+    fn list_test_pagination(
+        &self,
+        page: ListTestPaginationPage,
+    ) -> impl Future<Output = Result<Vec<TestPaginationRow>>> + Send;
+    fn list_periods_for_person(
+        &self,
+        person_id: &str,
+        location_id: Option<&str>,
+        only_unfinished: Option<bool>,
+        page: ListPeriodsPage,
+    ) -> impl Future<Output = Result<Vec<Period>>> + Send;
+    fn get_periods<T: AsRef<str> + Sync>(
+        &self,
+        ids: &[T],
+    ) -> impl Future<Output = Result<Vec<Option<Period>>>> + Send;
+    /// Ends the given period by setting its end_time to the current time
+    fn end_period(&self, period: &Period) -> impl Future<Output = Result<Period>> + Send;
+    /// Create a new period starting now for the given person at the given location
+    fn start_period_for_person_location(
+        &self,
+        person_id: &str,
+        location_id: &str,
+    ) -> impl Future<Output = Result<Period>> + Send;
+    fn create_person(
+        &self,
+        location_id: &str,
+        first_name: &str,
+        last_name: &str,
+        registration_number: &str,
+    ) -> impl Future<Output = Result<Person>> + Send;
+    fn update_person(
+        &self,
+        id: &str,
+        change: PersonUpdateShape<'_>,
+    ) -> impl Future<Output = Result<()>> + Send;
+    fn create_period(
+        &self,
+        person_id: &str,
+        location_id: &str,
+        category_id: &str,
+        start_time: u64,
+        end_time: u64,
+    ) -> impl Future<Output = Result<Period>> + Send;
+    fn update_period(
+        &self,
+        id: &str,
+        change: PeriodUpdateShape<'_>,
+    ) -> impl Future<Output = Result<()>> + Send;
+    fn create_session(
+        &self,
+        location_id: &str,
+        name: &str,
+        config: &serde_json::Map<String, serde_json::Value>,
+        healthcheck_url: Option<&str>,
+    ) -> impl Future<Output = Result<Session>> + Send;
+    fn update_session(
+        &self,
+        id: &str,
+        change: SessionUpdateShape<'_>,
+    ) -> impl Future<Output = Result<()>> + Send;
+
+    fn get_api_token(&self, id: &str) -> impl Future<Output = Result<Option<ApiToken>>> + Send;
+    fn get_api_token_by_hash(
+        &self,
+        token_hash: &str,
+    ) -> impl Future<Output = Result<Option<ApiToken>>> + Send;
+    fn list_api_tokens(&self) -> impl Future<Output = Result<Vec<ApiToken>>> + Send;
+    fn create_api_token(
+        &self,
+        name: &str,
+        token_hash: &str,
+        location_grants: Vec<String>,
+        read_only: bool,
+        expires_at: Option<u64>,
+        created_by_user_id: &str,
+    ) -> impl Future<Output = Result<ApiToken>> + Send;
+    fn update_api_token(
+        &self,
+        id: &str,
+        change: ApiTokenUpdateShape<'_>,
+    ) -> impl Future<Output = Result<()>> + Send;
+
+    fn create_location(
+        &self,
+        name: &str,
+        nitc_enabled: Option<u64>,
+        ses_api_headquarters_id: Option<&str>,
+    ) -> impl Future<Output = Result<Location>> + Send;
+    fn get_locations<T: AsRef<str> + Sync>(
+        &self,
+        ids: &[T],
+    ) -> impl Future<Output = Result<Vec<Option<Location>>>> + Send;
+    fn list_locations(
+        &self,
+        filter: ListLocationsFilter,
+    ) -> impl Future<Output = Result<Vec<Location>>> + Send;
+    fn update_location(
+        &self,
+        id: &str,
+        change: LocationUpdateShape<'_>,
+    ) -> impl Future<Output = Result<()>> + Send;
+    fn list_categories(&self) -> impl Future<Output = Result<Vec<Category>>> + Send;
+    fn get_categories<T: AsRef<str> + Sync>(
+        &self,
+        ids: &[T],
+    ) -> impl Future<Output = Result<Vec<Option<Category>>>> + Send;
+    fn create_category(
+        &self,
+        name: &str,
+        nitc_group_id: Option<&str>,
+        nitc_participant_type: Option<&str>,
+    ) -> impl Future<Output = Result<Category>> + Send;
+    fn update_category(
+        &self,
+        id: &str,
+        name: &str,
+        active: bool,
+        nitc_group_id: Option<&str>,
+        nitc_participant_type: Option<&str>,
+    ) -> impl Future<Output = Result<()>> + Send;
+
+    // ── NITC export ──────────────────────────────────────────────────────────
+
+    /// Read-only lookup of the nitc_events row for (location, nitc_group, date).
+    fn get_nitc_event_for_day(
+        &self,
+        location_id: &str,
+        nitc_group_id: &str,
+        date: NaiveDate,
+    ) -> impl Future<Output = Result<Option<NitcEvent>>> + Send;
+
+    /// Get or create the nitc_events row for (location, nitc_group, date).
+    /// Creates with ses_api_nitc_id=NULL; the SES API call happens later in Phase 2.
+    fn get_or_create_nitc_event_for_day(
+        &self,
+        location_id: &str,
+        nitc_group_id: &str,
+        date: NaiveDate,
+    ) -> impl Future<Output = Result<NitcEvent>> + Send;
+
+    fn get_nitc_event_by_id(
+        &self,
+        id: &str,
+    ) -> impl Future<Output = Result<Option<NitcEvent>>> + Send;
+
+    fn get_nitc_events_by_ids<T: AsRef<str> + Sync>(
+        &self,
+        ids: &[T],
+    ) -> impl Future<Output = Result<Vec<NitcEvent>>> + Send;
+
+    /// Fetch NITC group configuration (type, tags) by ID.
+    fn get_nitc_group(&self, id: &str) -> impl Future<Output = Result<Option<NitcGroup>>> + Send;
+
+    fn list_nitc_groups(&self) -> impl Future<Output = Result<Vec<NitcGroup>>> + Send;
+    fn create_nitc_group(
+        &self,
+        id: Option<&str>,
+        nitc_type: &str,
+        nitc_tag_ids: &[i32],
+    ) -> impl Future<Output = Result<NitcGroup>> + Send;
+    fn update_nitc_group(
+        &self,
+        id: &str,
+        nitc_type: &str,
+        nitc_tag_ids: &[i32],
+    ) -> impl Future<Output = Result<()>> + Send;
+    fn delete_nitc_group(&self, id: &str) -> impl Future<Output = Result<()>> + Send;
+
+    /// Atomically increment period.version and return the new value, to trigger NITC re-export.
+    fn bump_period_version(&self, period_id: &str) -> impl Future<Output = Result<u64>> + Send;
+
+    /// Atomically increment nitc_event.version and return the new value.
+    fn bump_nitc_event_version(&self, event_id: &str) -> impl Future<Output = Result<u64>> + Send;
+
+    /// Set period.nitc_event_id and clear nitc_participant_id.
+    fn set_period_nitc_event(
+        &self,
+        period_id: &str,
+        event_id: &str,
+    ) -> impl Future<Output = Result<()>> + Send;
+
+    /// Return IDs of all periods (including deleted ones with a participant) assigned to an event.
+    fn list_period_ids_for_nitc_event(
+        &self,
+        event_id: &str,
+    ) -> impl Future<Output = Result<Vec<String>>> + Send;
+
+    /// Store the SES API ID after creating the event in SES.
+    fn set_nitc_event_ses_id(
+        &self,
+        event_id: &str,
+        ses_api_nitc_id: i64,
+    ) -> impl Future<Output = Result<()>> + Send;
+
+    fn set_period_nitc_exported_version(
+        &self,
+        period_id: &str,
+        synced_version: u64,
+    ) -> impl Future<Output = Result<()>> + Send;
+
+    fn update_period_nitc_exported(
+        &self,
+        period_id: &str,
+        nitc_event_id: &str,
+        nitc_participant_id: i64,
+        synced_version: u64,
+    ) -> impl Future<Output = Result<()>> + Send;
+
+    fn clear_period_nitc_participant(
+        &self,
+        period_id: &str,
+        synced_version: u64,
+    ) -> impl Future<Output = Result<()>> + Send;
+
+    /// Mark the event as exported at the given version.
+    fn mark_nitc_event_synced(
+        &self,
+        event_id: &str,
+        synced_version: u64,
+    ) -> impl Future<Output = Result<()>> + Send;
+}

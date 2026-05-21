@@ -1,0 +1,5 @@
+.DS_Store
+.env.secret
+infra/terraform.tfvars
+infra/.terraform/
+infra/.terraform.lock.hcl

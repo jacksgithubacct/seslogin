@@ -1,0 +1,41 @@
+name: Pagination integration test (reusable)
+on:
+  workflow_call:
+    secrets:
+      AWS_SECRET_ACCESS_KEY:
+        required: true
+
+env:
+  RUSTFLAGS: "-Dwarnings"
+
+jobs:
+  pagination_check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Setup Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: api
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: pagination-test/package-lock.json
+      - name: Install pagination-test dependencies
+        run: cd pagination-test && npm ci
+      - name: Load DB_PREFIX from .env
+        run: |
+          source .env
+          echo "DB_PREFIX=$DB_PREFIX" >> "$GITHUB_ENV"
+      - name: Run pagination integration tests
+        run: cd pagination-test && npx tsx run-tests.ts
+        env:
+          AWS_ACCESS_KEY_ID: ${{ vars.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ap-southeast-2

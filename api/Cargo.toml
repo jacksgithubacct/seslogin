@@ -1,0 +1,94 @@
+[package]
+name = "seslogin"
+version = "0.1.0"
+edition = "2024"
+default-run = "poem"
+
+[[bin]]
+name = "pagination-test-server"
+path = "src/bin/pagination-test-server.rs"
+
+[[bin]]
+name = "sync-members-lambda"
+path = "src/bin/sync-members-lambda.rs"
+
+[[bin]]
+name = "sync-locations"
+path = "src/bin/sync-locations.rs"
+
+[[bin]]
+name = "sync-locations-lambda"
+path = "src/bin/sync-locations-lambda.rs"
+
+[[bin]]
+name = "dispatcher-lambda"
+path = "src/bin/dispatcher-lambda.rs"
+
+[[bin]]
+name = "checker-lambda"
+path = "src/bin/checker-lambda.rs"
+
+[[bin]]
+name = "make-jwt"
+path = "src/bin/make-jwt.rs"
+
+[[bin]]
+name = "list-sessions"
+path = "src/bin/list-sessions.rs"
+
+[[bin]]
+name = "list-recent-periods"
+path = "src/bin/list-recent-periods.rs"
+
+[[bin]]
+name = "check-category-ids"
+path = "src/bin/check-category-ids.rs"
+
+[[bin]]
+name = "nitc-export"
+path = "src/bin/nitc-export.rs"
+
+[[bin]]
+name = "nitc-export-lambda"
+path = "src/bin/nitc-export-lambda.rs"
+
+[[bin]]
+name = "activity-summary-lambda"
+path = "src/bin/activity-summary-lambda.rs"
+
+[[bin]]
+name = "activity-summary"
+path = "src/bin/activity-summary.rs"
+
+[dependencies]
+anyhow = "1.0.99"
+async-graphql = { version = "7.0.17", features = ["dataloader"] }
+async-graphql-poem = "7.0.17"
+aws-config = { version = "1.8.5", features = ["credentials-login"] }
+aws-sdk-dynamodb = "1.89.0"
+aws-sdk-ses = "1.89.0"
+aws-sdk-sns = "1.89.0"
+aws-sdk-sqs = "1.89.0"
+lambda_http = "1.2"
+lambda_runtime = "1.2"
+base64 = "0.22.1"
+chrono = "0.4.42"
+chrono-tz = { version = "0.10", features = ["serde"] }
+clap = { version = "4.5.47", features = ["derive"] }
+hex = "0.4.3"
+poem = "3.1.12"
+rand = "0.10"
+sha2 = "0.10"
+tokio = { version = "1.47.1", features = ["full"] }
+uuid = { version = "1.18.0", features = ["v4"] }
+http = "1.1.0"
+serde_json = "1.0.145"
+thiserror = "2.0.16"
+tracing = "0.1.41"
+tracing-subscriber = "0.3.20"
+dotenvy = "0.15.7"
+serde = { version = "1.0", features = ["derive"] }
+jsonwebtoken = { version = "10", features = ["rust_crypto"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "http2", "charset", "query"] }
+xxhash-rust = { version = "0.8", features = ["xxh64"] }
+nanoid = "0.5.0"

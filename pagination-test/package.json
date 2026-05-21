@@ -1,0 +1,21 @@
+{
+  "name": "pagination-test",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "relay": "relay-compiler",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx src/tests/pagination.test.ts",
+    "run-tests": "tsx run-tests.ts"
+  },
+  "dependencies": {
+    "relay-runtime": "^18.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/relay-runtime": "^18.2.5",
+    "relay-compiler": "^18.2.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}

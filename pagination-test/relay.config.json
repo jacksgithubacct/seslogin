@@ -1,0 +1,7 @@
+{
+  "src": "./src",
+  "schema": "./schema.graphql",
+  "language": "typescript",
+  "artifactDirectory": "./src/__generated__",
+  "excludes": ["**/__generated__/**", "**/node_modules/**"]
+}

@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 12 12" role="img" aria-label="expired status bullet">
+  <defs>
+    <radialGradient id="statusGray" cx="35%" cy="30%" r="70%">
+      <stop offset="0%" stop-color="#E9EDF2" />
+      <stop offset="55%" stop-color="#A4ADB8" />
+      <stop offset="100%" stop-color="#6E7682" />
+    </radialGradient>
+  </defs>
+  <circle cx="6" cy="6" r="5.5" fill="url(#statusGray)" />
+</svg>

@@ -1,0 +1,189 @@
+import {
+  graphql,
+  useFragment,
+  useLazyLoadQuery,
+  useMutation,
+} from "react-relay";
+import type { LocationList_item$key } from "./__generated__/LocationList_item.graphql";
+import type { LocationListQuery } from "./__generated__/LocationListQuery.graphql";
+import { Link, useNavigate } from "react-router";
+import type { LocationListDisableMutation } from "./__generated__/LocationListDisableMutation.graphql";
+import type { LocationListEnqueueSyncMutation } from "./__generated__/LocationListEnqueueSyncMutation.graphql";
+import { useSettingsDispatch } from "../../lib/settings";
+import { formatFullDateTime } from "../../lib/time";
+import { useUserInfo } from "../components/useUserInfo";
+
+function Row(props: {
+  location: LocationList_item$key;
+  idx: number;
+  isDev: boolean;
+}) {
+  const idx = props.idx;
+  const isDev = props.isDev;
+  const settingsDispatch = useSettingsDispatch()!;
+  const navigate = useNavigate();
+  const location = useFragment<LocationList_item$key>(
+    graphql`
+      fragment LocationList_item on Location {
+        id
+        name
+        enabled
+        nitcEnabled
+        lastSuccessfulMemberSync
+      }
+    `,
+    props.location,
+  );
+
+  const [commitMutation, isMutationInFlight] =
+    useMutation<LocationListDisableMutation>(graphql`
+      mutation LocationListDisableMutation(
+        $id: ID!
+        $name: String!
+        $nitcEnabled: Int
+      ) {
+        updateLocation(
+          id: $id
+          name: $name
+          enabled: false
+          nitcEnabled: $nitcEnabled
+        ) {
+          id
+          name
+          enabled
+          nitcEnabled
+        }
+      }
+    `);
+
+  const [commitSync, isSyncInFlight] =
+    useMutation<LocationListEnqueueSyncMutation>(graphql`
+      mutation LocationListEnqueueSyncMutation($locationId: ID!) {
+        enqueueMemberSync(locationId: $locationId)
+      }
+    `);
+
+  function triggerSync() {
+    commitSync({ variables: { locationId: location.id } });
+  }
+
+  async function disableLocation() {
+    const yes = confirm(
+      `Are you sure you want to disable location ${location.name}?`,
+    );
+    if (yes) {
+      await new Promise((resolve, reject) => {
+        commitMutation({
+          variables: {
+            id: location.id,
+            name: location.name,
+            nitcEnabled: location.nitcEnabled,
+          },
+          onCompleted: resolve,
+          onError: reject,
+          updater: (store) => {
+            store.invalidateStore();
+          },
+        });
+      });
+    }
+  }
+
+  function switchToLocation() {
+    settingsDispatch({
+      type: "set_location",
+      id: location.id,
+    });
+    navigate("/admin");
+  }
+
+  const lastSync = location.lastSuccessfulMemberSync
+    ? formatFullDateTime(new Date(location.lastSuccessfulMemberSync * 1000))
+    : "Never";
+
+  return (
+    <tr className={idx % 2 === 0 ? "odd" : "even"}>
+      {isDev && (
+        <td style={{ fontFamily: "monospace", fontSize: "0.85em" }}>
+          {location.id}
+        </td>
+      )}
+      <td className="nowrap">
+        <div className={location.enabled ? "" : "strike"}>{location.name}</div>
+      </td>
+      <td className="nowrap">{lastSync}</td>
+      <td>
+        {location.nitcEnabled
+          ? new Date(location.nitcEnabled * 1000).toISOString().slice(0, 10)
+          : ""}
+      </td>
+      <td className="options">
+        <button onClick={switchToLocation}>Switch to</button>&nbsp;
+        <button onClick={triggerSync} disabled={isSyncInFlight}>
+          Sync
+        </button>
+        &nbsp;
+        <Link to={`/admin/locations/${location.id}`}>Edit</Link>&nbsp;
+        {location.enabled && (
+          <button
+            className="delete"
+            onClick={disableLocation}
+            disabled={isMutationInFlight}
+          >
+            Disable
+          </button>
+        )}
+      </td>
+    </tr>
+  );
+}
+
+export default function LocationList() {
+  const { isDev } = useUserInfo();
+  const data = useLazyLoadQuery<LocationListQuery>(
+    graphql`
+      query LocationListQuery {
+        locations {
+          id
+          name
+          ...LocationList_item
+        }
+      }
+    `,
+    {},
+  );
+
+  const locations = data?.locations
+    ?.filter((location) => location != null)
+    .sort((a, b) => {
+      const aName = a.name ?? "";
+      const bName = b.name ?? "";
+      return aName.localeCompare(bName);
+    });
+
+  return (
+    <>
+      <table className="admin">
+        <thead>
+          <tr>
+            {isDev && <th>ID</th>}
+            <th>Name</th>
+            <th>Last Member Sync</th>
+            <th>NITC Export</th>
+            <th style={{ width: 100 }}></th>
+          </tr>
+        </thead>
+        <tbody>
+          {locations?.map((location, idx) => (
+            <Row
+              key={location.id}
+              location={location}
+              idx={idx}
+              isDev={isDev}
+            />
+          ))}
+        </tbody>
+      </table>
+    </>
+  );
+}
