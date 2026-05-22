@@ -109,6 +109,14 @@ resource "aws_dynamodb_table" "prod_period" {
     name = "nitc_event_id"
     type = "S"
   }
+  attribute {
+    name = "location_open"
+    type = "S"
+  }
+  attribute {
+    name = "location_live"
+    type = "S"
+  }
 
   global_secondary_index {
     name            = "location_id-start_time-index"
@@ -126,6 +134,20 @@ resource "aws_dynamodb_table" "prod_period" {
   global_secondary_index {
     name            = "nitc_event_id-index"
     hash_key        = "nitc_event_id"
+    projection_type = "ALL"
+  }
+  # Sparse index: only open (no end_time), non-deleted periods. Used by onlyActive=true queries.
+  global_secondary_index {
+    name            = "location_open-start_time-index"
+    hash_key        = "location_open"
+    range_key       = "start_time"
+    projection_type = "ALL"
+  }
+  # Sparse index: only non-deleted periods (open or closed). Used by onlyActive=false queries.
+  global_secondary_index {
+    name            = "location_live-start_time-index"
+    hash_key        = "location_live"
+    range_key       = "start_time"
     projection_type = "ALL"
   }
 }

@@ -1268,7 +1268,7 @@ impl db::Handler for Handler {
             .update_item()
             .table_name(self.table_name("period"))
             .key("id", AttributeValue::S(period.id.to_string()))
-            .update_expression("SET end_time = :end_time ADD v :one")
+            .update_expression("SET end_time = :end_time REMOVE location_open ADD v :one")
             .expression_attribute_values(":end_time", AttributeValue::N(unix_time.to_string()))
             .expression_attribute_values(":one", AttributeValue::N("1".to_string()))
             .return_consumed_capacity(ReturnConsumedCapacity::Total)
@@ -1304,6 +1304,8 @@ impl db::Handler for Handler {
             .item("person_id", AttributeValue::S(person_id.to_string()))
             .item("location_id", AttributeValue::S(location_id.to_string()))
             .item("start_time", AttributeValue::N(unix_time.to_string()))
+            .item("location_open", AttributeValue::S(location_id.to_string()))
+            .item("location_live", AttributeValue::S(location_id.to_string()))
             .item("v", AttributeValue::N("1".to_string()))
             .return_consumed_capacity(ReturnConsumedCapacity::Total)
             .send()
@@ -1504,6 +1506,7 @@ impl db::Handler for Handler {
             .item("start_time", AttributeValue::N(start_time.to_string()))
             .item("end_time", AttributeValue::N(end_time.to_string()))
             .item("category_id", AttributeValue::S(category_id.to_string()))
+            .item("location_live", AttributeValue::S(location_id.to_string()))
             .item("v", AttributeValue::N("1".to_string()))
             .return_consumed_capacity(ReturnConsumedCapacity::Total)
             .send()
@@ -1543,7 +1546,7 @@ impl db::Handler for Handler {
                     .table_name(self.table_name("period"))
                     .key("id", AttributeValue::S(id.to_string()))
                     .condition_expression("attribute_exists(id)")
-                    .update_expression("SET person_id = :person_id, location_id = :location_id, start_time = :start_time, end_time = :end_time, category_id = :category_id ADD v :one")
+                    .update_expression("SET person_id = :person_id, location_id = :location_id, start_time = :start_time, end_time = :end_time, category_id = :category_id, location_live = :location_id REMOVE location_open ADD v :one")
                     .expression_attribute_values(":person_id", AttributeValue::S(person_id.to_string()))
                     .expression_attribute_values(":location_id", AttributeValue::S(location_id.to_string()))
                     .expression_attribute_values(":start_time", AttributeValue::N(start_time.to_string()))
@@ -1567,7 +1570,7 @@ impl db::Handler for Handler {
                     .key("id", AttributeValue::S(id.to_string()))
                     .condition_expression("attribute_exists(id)")
                     .update_expression(
-                        "SET start_time = :start_time, end_time = :end_time, category_id = :category_id ADD v :one",
+                        "SET start_time = :start_time, end_time = :end_time, category_id = :category_id REMOVE location_open ADD v :one",
                     )
                     .expression_attribute_values(":start_time", AttributeValue::N(start_time.to_string()))
                     .expression_attribute_values(":end_time", AttributeValue::N(end_time.to_string()))
@@ -1592,7 +1595,9 @@ impl db::Handler for Handler {
                     .table_name(self.table_name("period"))
                     .key("id", AttributeValue::S(id.to_string()))
                     .condition_expression("attribute_exists(id)")
-                    .update_expression("SET deleted = :deleted ADD v :one")
+                    .update_expression(
+                        "SET deleted = :deleted REMOVE location_open, location_live ADD v :one",
+                    )
                     .expression_attribute_values(":deleted", AttributeValue::N(deleted_time))
                     .expression_attribute_values(":one", AttributeValue::N("1".to_string()))
                     .return_consumed_capacity(ReturnConsumedCapacity::Total)
