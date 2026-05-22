@@ -1067,11 +1067,22 @@ impl db::Handler for Handler {
         let (scan_forward, reverse_output) =
             page_scan_direction(page.after.is_some(), page.before.is_some(), page.descending);
 
+        // Sparse indexes: location_open contains only open non-deleted periods;
+        // location_live contains all non-deleted periods. No filter expression needed.
+        let (index_name, location_key_attr) = if only_active {
+            ("location_open-start_time-index", "location_open")
+        } else {
+            ("location_live-start_time-index", "location_live")
+        };
+
         // Key condition and its attribute values — cloned into each loop iteration.
+        let key_condition_with_range =
+            format!("{location_key_attr} = :location_id AND start_time BETWEEN :lo AND :hi");
+        let key_condition_simple = format!("{location_key_attr} = :location_id");
         let (key_condition, key_attrs): (&str, Vec<(&str, AttributeValue)>) =
             if let Some((lo, hi)) = timestamp_range {
                 (
-                    "location_id = :location_id AND start_time BETWEEN :lo AND :hi",
+                    key_condition_with_range.as_str(),
                     vec![
                         (":location_id", AttributeValue::S(location_id.to_string())),
                         (":lo", AttributeValue::N(lo.to_string())),
@@ -1080,34 +1091,19 @@ impl db::Handler for Handler {
                 )
             } else {
                 (
-                    "location_id = :location_id",
+                    key_condition_simple.as_str(),
                     vec![(":location_id", AttributeValue::S(location_id.to_string()))],
                 )
             };
 
-        // Filter expression and its attribute values — cloned into each loop iteration.
-        let (filter_expr, filter_attrs): (&str, Vec<(&str, AttributeValue)>) = if only_active {
-            (
-                "(attribute_not_exists(end_time) OR end_time = :null) AND (attribute_not_exists(deleted) OR deleted = :zero)",
-                vec![
-                    (":null", AttributeValue::Null(true)),
-                    (":zero", AttributeValue::N("0".to_string())),
-                ],
-            )
-        } else {
-            (
-                "attribute_not_exists(deleted) OR deleted = :zero",
-                vec![(":zero", AttributeValue::N("0".to_string()))],
-            )
-        };
-
         // Initial ExclusiveStartKey from the caller's cursor.
+        // Must include the table hash key (id) and both GSI keys (location attr + start_time).
         let mut exclusive_start_key: Option<HashMap<String, AttributeValue>> =
             page.after.as_ref().or(page.before.as_ref()).map(|c| {
                 HashMap::from([
                     ("id".to_string(), AttributeValue::S(c.id.clone())),
                     (
-                        "location_id".to_string(),
+                        location_key_attr.to_string(),
                         AttributeValue::S(location_id.to_string()),
                     ),
                     (
@@ -1124,16 +1120,12 @@ impl db::Handler for Handler {
                 .client
                 .query()
                 .table_name(self.table_name("period"))
-                .index_name("location_id-start_time-index")
+                .index_name(index_name)
                 .key_condition_expression(key_condition)
-                .filter_expression(filter_expr)
                 .limit(page.limit)
                 .scan_index_forward(scan_forward)
                 .return_consumed_capacity(ReturnConsumedCapacity::Total);
             for (k, v) in &key_attrs {
-                builder = builder.expression_attribute_values(*k, v.clone());
-            }
-            for (k, v) in &filter_attrs {
                 builder = builder.expression_attribute_values(*k, v.clone());
             }
             if let Some(esk) = exclusive_start_key.take() {
