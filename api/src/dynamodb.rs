@@ -1,6 +1,7 @@
 use crate::db::{self, HasID};
 use crate::db::{
-    ApiToken, Category, Error, ListSessionsQuery, Location, Period, Person, Session, User,
+    ApiToken, Category, Error, ListSessionsQuery, Location, LoginCode, Period, Person, Session,
+    User, UserToken,
 };
 use crate::nonce;
 use crate::request_metrics::METRICS;
@@ -285,6 +286,53 @@ impl TryInto<ApiToken> for Item {
             created_by_user_id: self.string_field("created_by_user_id")?.unwrap_or_default(),
             expires_at: self.i64_field("expires_at")?.map(|i| i as u64),
             revoked_at: self.i64_field("revoked_at")?.map(|i| i as u64),
+            last_used_at: self.i64_field("last_used_at")?.map(|i| i as u64),
+        })
+    }
+}
+
+impl TryInto<LoginCode> for Item {
+    type Error = HydrationError;
+    fn try_into(self) -> Result<LoginCode, Self::Error> {
+        Ok(LoginCode {
+            email: self
+                .string_field("email")?
+                .ok_or_else(|| anyhow!("LoginCode missing email"))?,
+            code_hash: self
+                .string_field("code_hash")?
+                .ok_or_else(|| anyhow!("LoginCode missing code_hash"))?,
+            expires_at: self
+                .i64_field("expires_at")?
+                .ok_or_else(|| anyhow!("LoginCode missing expires_at"))?
+                as u64,
+            attempts: self.i64_field("attempts")?.unwrap_or(0) as u64,
+            last_sent_at: self
+                .i64_field("last_sent_at")?
+                .ok_or_else(|| anyhow!("LoginCode missing last_sent_at"))?
+                as u64,
+        })
+    }
+}
+
+impl TryInto<UserToken> for Item {
+    type Error = HydrationError;
+    fn try_into(self) -> Result<UserToken, Self::Error> {
+        Ok(UserToken {
+            id: self.id(),
+            token_hash: self
+                .string_field("token_hash")?
+                .ok_or_else(|| anyhow!("UserToken missing token_hash"))?,
+            user_id: self
+                .string_field("user_id")?
+                .ok_or_else(|| anyhow!("UserToken missing user_id"))?,
+            created_at: self
+                .i64_field("created_at")?
+                .ok_or_else(|| anyhow!("UserToken missing created_at"))?
+                as u64,
+            expires_at: self
+                .i64_field("expires_at")?
+                .ok_or_else(|| anyhow!("UserToken missing expires_at"))?
+                as u64,
             last_used_at: self.i64_field("last_used_at")?.map(|i| i as u64),
         })
     }
@@ -2951,5 +2999,215 @@ impl db::Handler for Handler {
             rows.reverse();
         }
         Ok(rows)
+    }
+
+    async fn put_login_code(
+        &self,
+        email: &str,
+        code_hash: &str,
+        expires_at: u64,
+        last_sent_at: u64,
+    ) -> db::Result<()> {
+        if self.read_only {
+            return Err(db::Error::MutationDisabled);
+        }
+        self.client
+            .put_item()
+            .table_name(self.table_name("login_code"))
+            .item("email", AttributeValue::S(email.to_string()))
+            .item("code_hash", AttributeValue::S(code_hash.to_string()))
+            .item("expires_at", AttributeValue::N(expires_at.to_string()))
+            .item("attempts", AttributeValue::N("0".to_string()))
+            .item("last_sent_at", AttributeValue::N(last_sent_at.to_string()))
+            .send()
+            .await
+            .map_err(|e| Error::Infrastructure(sdk_err_msg(e)))?;
+        Ok(())
+    }
+
+    async fn get_login_code(&self, email: &str) -> db::Result<Option<LoginCode>> {
+        let resp = self
+            .client
+            .get_item()
+            .table_name(self.table_name("login_code"))
+            .key("email", AttributeValue::S(email.to_string()))
+            .return_consumed_capacity(ReturnConsumedCapacity::Total)
+            .send()
+            .await
+            .map_err(|e| Error::Infrastructure(sdk_err_msg(e)))?;
+        record_capacity("get_login_code", resp.consumed_capacity(), CapKind::Read);
+        match resp.item {
+            Some(item) => Ok(Some(Item(item).try_into()?)),
+            None => Ok(None),
+        }
+    }
+
+    async fn delete_login_code(&self, email: &str) -> db::Result<()> {
+        if self.read_only {
+            return Err(db::Error::MutationDisabled);
+        }
+        self.client
+            .delete_item()
+            .table_name(self.table_name("login_code"))
+            .key("email", AttributeValue::S(email.to_string()))
+            .send()
+            .await
+            .map_err(|e| Error::Infrastructure(sdk_err_msg(e)))?;
+        Ok(())
+    }
+
+    async fn increment_login_code_attempts(&self, email: &str) -> db::Result<()> {
+        if self.read_only {
+            return Err(db::Error::MutationDisabled);
+        }
+        self.client
+            .update_item()
+            .table_name(self.table_name("login_code"))
+            .key("email", AttributeValue::S(email.to_string()))
+            .update_expression("ADD attempts :one")
+            .expression_attribute_values(":one", AttributeValue::N("1".to_string()))
+            .send()
+            .await
+            .map_err(|e| Error::Infrastructure(sdk_err_msg(e)))?;
+        Ok(())
+    }
+
+    async fn create_user_token(
+        &self,
+        token_hash: &str,
+        user_id: &str,
+        expires_at: u64,
+    ) -> db::Result<UserToken> {
+        if self.read_only {
+            return Err(db::Error::MutationDisabled);
+        }
+        let id = new_id();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        self.client
+            .put_item()
+            .table_name(self.table_name("user_token"))
+            .item("id", AttributeValue::S(id.clone()))
+            .item("token_hash", AttributeValue::S(token_hash.to_string()))
+            .item("user_id", AttributeValue::S(user_id.to_string()))
+            .item("created_at", AttributeValue::N(now.to_string()))
+            .item("expires_at", AttributeValue::N(expires_at.to_string()))
+            .send()
+            .await
+            .map_err(|e| Error::Infrastructure(sdk_err_msg(e)))?;
+        Ok(UserToken {
+            id,
+            token_hash: token_hash.to_string(),
+            user_id: user_id.to_string(),
+            created_at: now,
+            expires_at,
+            last_used_at: None,
+        })
+    }
+
+    async fn get_user_token_by_hash(&self, token_hash: &str) -> db::Result<Option<UserToken>> {
+        let resp = self
+            .client
+            .query()
+            .table_name(self.table_name("user_token"))
+            .index_name("token_hash-index")
+            .key_condition_expression("token_hash = :token_hash")
+            .expression_attribute_values(":token_hash", AttributeValue::S(token_hash.to_string()))
+            .return_consumed_capacity(ReturnConsumedCapacity::Total)
+            .send()
+            .await
+            .map_err(|e| Error::Infrastructure(sdk_err_msg(e)))?;
+        record_capacity(
+            "get_user_token_by_hash",
+            resp.consumed_capacity(),
+            CapKind::Read,
+        );
+        if resp.count == 0 {
+            return Ok(None);
+        }
+        if resp.count > 1 {
+            return Err(Error::Integrity(
+                "Multiple user tokens found with same hash".to_string(),
+            ));
+        }
+        let gsi_item = Item(
+            resp.items
+                .ok_or_else(|| Error::Infrastructure("items missing".to_string()))?
+                .into_iter()
+                .next()
+                .unwrap(),
+        );
+        let id = gsi_item.id();
+        let full = self
+            .client
+            .get_item()
+            .table_name(self.table_name("user_token"))
+            .key("id", AttributeValue::S(id))
+            .return_consumed_capacity(ReturnConsumedCapacity::Total)
+            .send()
+            .await
+            .map_err(|e| Error::Infrastructure(sdk_err_msg(e)))?;
+        record_capacity(
+            "get_user_token_by_hash_fetch",
+            full.consumed_capacity(),
+            CapKind::Read,
+        );
+        match full.item {
+            Some(item) => Ok(Some(Item(item).try_into()?)),
+            None => Ok(None),
+        }
+    }
+
+    async fn update_user_token(
+        &self,
+        id: &str,
+        change: db::UserTokenUpdateShape,
+    ) -> db::Result<()> {
+        if self.read_only {
+            return Err(db::Error::MutationDisabled);
+        }
+        match change {
+            db::UserTokenUpdateShape::TouchLastUsed => {
+                let now = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs();
+                let new_expires = now + crate::expire::DEFAULT_USER_EXPIRE_S;
+                self.client
+                    .update_item()
+                    .table_name(self.table_name("user_token"))
+                    .key("id", AttributeValue::S(id.to_string()))
+                    .condition_expression("attribute_exists(id)")
+                    .update_expression("SET last_used_at = :last_used_at, expires_at = :expires_at")
+                    .expression_attribute_values(
+                        ":last_used_at",
+                        AttributeValue::N(now.to_string()),
+                    )
+                    .expression_attribute_values(
+                        ":expires_at",
+                        AttributeValue::N(new_expires.to_string()),
+                    )
+                    .send()
+                    .await
+                    .map_err(|e| map_update_err(e, format!("UserToken {}", id)))?;
+            }
+        }
+        Ok(())
+    }
+
+    async fn delete_user_token(&self, id: &str) -> db::Result<()> {
+        if self.read_only {
+            return Err(db::Error::MutationDisabled);
+        }
+        self.client
+            .delete_item()
+            .table_name(self.table_name("user_token"))
+            .key("id", AttributeValue::S(id.to_string()))
+            .send()
+            .await
+            .map_err(|e| Error::Infrastructure(sdk_err_msg(e)))?;
+        Ok(())
     }
 }

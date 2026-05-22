@@ -17,6 +17,7 @@ use crate::auth;
 use crate::auth::AuthInfo;
 use crate::db;
 use crate::db::Handler;
+use hex;
 
 use super::auth::{AuthGuard, AuthRequirement, require_location_access, require_writable};
 use super::{ApiToken, Category, Location, NitcGroup, Period, Person, Session, User};
@@ -110,6 +111,162 @@ impl<A: App + HasDb + HasSqs + Send + Sync + 'static> MutationRoot<A> {
                 None
             }
         }
+    }
+
+    /// Request an email login code. Always returns true to avoid email enumeration.
+    /// Requires a valid Cloudflare Turnstile token.
+    async fn request_auth_code(&self, email: String, turnstile_token: String) -> bool {
+        use sha2::{Digest, Sha256};
+
+        match crate::turnstile::verify(&turnstile_token).await {
+            Ok(true) => {}
+            Ok(false) => {
+                info!("Turnstile challenge failed for request_auth_code");
+                return true;
+            }
+            Err(e) => {
+                warn!("Turnstile error in request_auth_code: {:#}", e);
+                return true;
+            }
+        }
+
+        let user_id = match self.app.db().get_user_id_by_email(&email).await {
+            Ok(Some(id)) => id,
+            Ok(None) => return true,
+            Err(e) => {
+                warn!("DB error looking up user in request_auth_code: {:#}", e);
+                return true;
+            }
+        };
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        // Rate limit: at most one code per 30 seconds per email
+        if let Ok(Some(existing)) = self.app.db().get_login_code(&email).await
+            && now < existing.last_sent_at + 30
+        {
+            info!("Rate limit hit for request_auth_code email={}", email);
+            return true;
+        }
+
+        let code = crate::nonce::generate_code(6);
+        let code_hash = {
+            let mut hasher = Sha256::new();
+            hasher.update(code.as_bytes());
+            hex::encode(hasher.finalize())
+        };
+        let expires_at = now + 10 * 60;
+
+        if let Err(e) = self
+            .app
+            .db()
+            .put_login_code(&email, &code_hash, expires_at, now)
+            .await
+        {
+            warn!("Failed to store login code: {:#}", e);
+            return true;
+        }
+
+        let subject = "Your seslogin login code";
+        let body = format!(
+            "Your login code is: {}\n\nThis code expires in 10 minutes. Do not share it.\n\nIf you did not request this code, you can ignore this email.",
+            code
+        );
+
+        tracing::info!(user_id = %user_id, "Sending login code to {}", email);
+        if let Err(e) = crate::mail::send_plain_text(&email, subject, &body).await {
+            warn!("Failed to send login code email to {}: {:#}", email, e);
+        }
+
+        true
+    }
+
+    /// Verify an email login code and return an opaque session token on success.
+    async fn verify_auth_code(&self, email: String, code: String) -> Option<String> {
+        use sha2::{Digest, Sha256};
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        let record = match self.app.db().get_login_code(&email).await {
+            Ok(Some(r)) => r,
+            Ok(None) => {
+                info!("verify_auth_code: no code for email={}", email);
+                return None;
+            }
+            Err(e) => {
+                warn!("DB error in verify_auth_code: {:#}", e);
+                return None;
+            }
+        };
+
+        if now >= record.expires_at {
+            let _ = self.app.db().delete_login_code(&email).await;
+            info!("verify_auth_code: expired code for email={}", email);
+            return None;
+        }
+
+        if record.attempts >= 5 {
+            let _ = self.app.db().delete_login_code(&email).await;
+            info!("verify_auth_code: too many attempts for email={}", email);
+            return None;
+        }
+
+        let _ = self.app.db().increment_login_code_attempts(&email).await;
+
+        let expected_hash = {
+            let mut hasher = Sha256::new();
+            hasher.update(code.as_bytes());
+            hex::encode(hasher.finalize())
+        };
+
+        if record.code_hash != expected_hash {
+            info!("verify_auth_code: wrong code for email={}", email);
+            return None;
+        }
+
+        let _ = self.app.db().delete_login_code(&email).await;
+
+        let user_id = match self.app.db().get_user_id_by_email(&email).await {
+            Ok(Some(id)) => id,
+            Ok(None) => {
+                warn!("verify_auth_code: user not found for email={}", email);
+                return None;
+            }
+            Err(e) => {
+                warn!("DB error fetching user in verify_auth_code: {:#}", e);
+                return None;
+            }
+        };
+
+        match auth::issue_user_token(&*self.app, &user_id).await {
+            Ok(token) => {
+                info!("Issued user token for user_id={}", user_id);
+                Some(token)
+            }
+            Err(e) => {
+                warn!("Failed to issue user token: {:#}", e);
+                None
+            }
+        }
+    }
+
+    /// Revoke the current user's opaque session token (no-op for Auth0/JWT sessions).
+    #[graphql(guard = "AuthGuard::new(AuthRequirement::User)")]
+    async fn logout(&self, ctx: &Context<'_>) -> Result<bool> {
+        if let Some(AuthInfo::User {
+            token_id: Some(token_id),
+            ..
+        }) = ctx.data_opt::<AuthInfo>()
+        {
+            self.app.db().delete_user_token(token_id).await?;
+        }
+        Ok(true)
     }
 
     #[graphql(guard = "AuthGuard::new(AuthRequirement::SuperUser)")]

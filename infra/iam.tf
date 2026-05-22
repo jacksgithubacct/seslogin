@@ -48,6 +48,34 @@ resource "aws_iam_role_policy" "api_lambda_sqs_send" {
   })
 }
 
+resource "aws_iam_role_policy" "api_lambda_ses" {
+  name = "ses-send"
+  role = aws_iam_role.api_lambda.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["ses:SendEmail", "ses:SendRawEmail"]
+      Resource = "*"
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "test_api_lambda_ses" {
+  name = "ses-send"
+  role = aws_iam_role.test_api_lambda.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["ses:SendEmail", "ses:SendRawEmail"]
+      Resource = "*"
+    }]
+  })
+}
+
 # ── Sync lambda role ───────────────────────────────────────────────────────────
 
 resource "aws_iam_role" "sync_lambda" {

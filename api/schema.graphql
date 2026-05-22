@@ -79,6 +79,19 @@ type MemberPeriodSummary {
 
 type MutationRoot {
 	authSession(code: String!): String
+	"""
+	Request an email login code. Always returns true to avoid email enumeration.
+	Requires a valid Cloudflare Turnstile token.
+	"""
+	requestAuthCode(email: String!, turnstileToken: String!): Boolean!
+	"""
+	Verify an email login code and return an opaque session token on success.
+	"""
+	verifyAuthCode(email: String!, code: String!): String
+	"""
+	Revoke the current user's opaque session token (no-op for Auth0/JWT sessions).
+	"""
+	logout: Boolean!
 	createUser(email: String!, isSuper: Boolean!, locationGrants: [String!]!): User!
 	updateUser(id: ID!, email: String!, isSuper: Boolean!, isDev: Boolean!, deleted: Boolean!, locationGrants: [String!]!): User!
 	createPerson(locationId: ID!, firstName: String!, lastName: String!, memberNumber: String!): Person!

@@ -36,6 +36,8 @@ pub enum AuthInfo {
         id: String,
         is_super: bool,
         location_grants: Vec<String>,
+        /// Set only when authenticated via an opaque user token; None for Auth0/JWT.
+        token_id: Option<String>,
     },
     Session {
         id: String,
@@ -49,6 +51,7 @@ pub enum AuthInfo {
 }
 
 pub const API_TOKEN_PREFIX: &str = "slgn_";
+pub const USER_TOKEN_PREFIX: &str = "slu_";
 
 pub async fn issue_token_for_scan_code<A: App + HasDb>(app: &A, code: &str) -> Result<String> {
     if code.is_empty() {
@@ -105,6 +108,7 @@ async fn fetch_update_user_auth_info<A: App + HasDb>(
         id: user_id,
         is_super: user.is_super,
         location_grants: user.location_grants,
+        token_id: None,
     })
 }
 
@@ -276,6 +280,82 @@ async fn verify_token_with_jwt<A: App + HasDb + HasSqs>(
     }
 }
 
+fn hash_user_token(secret: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(secret.as_bytes());
+    hex::encode(hasher.finalize())
+}
+
+async fn verify_token_with_user_token<A: App + HasDb>(
+    app: &A,
+    token: &str,
+) -> Result<AuthInfo, AuthError> {
+    let token_hash = hash_user_token(token);
+    let user_token = app
+        .db()
+        .get_user_token_by_hash(&token_hash)
+        .await
+        .map_err(|e| classify_db_err("fetch user token by hash", e))?
+        .ok_or_else(|| AuthError::Permanent("Invalid user token".into()))?;
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| AuthError::Transient(e.to_string()))?
+        .as_secs();
+
+    if now >= user_token.expires_at {
+        return Err(AuthError::Permanent("User token has expired".into()));
+    }
+
+    let token_id = user_token.id.clone();
+
+    if user_token.last_used_at.is_none_or(|t| now > t + 60) {
+        match app
+            .db()
+            .update_user_token(&user_token.id, db::UserTokenUpdateShape::TouchLastUsed)
+            .await
+        {
+            Ok(_) => {}
+            Err(db::Error::MutationDisabled) => {
+                warn!("update_user_token skipped: mutations disabled");
+            }
+            Err(e) => return Err(AuthError::Transient(e.to_string())),
+        }
+    }
+
+    let auth_info = fetch_update_user_auth_info(app, user_token.user_id).await?;
+    match auth_info {
+        AuthInfo::User {
+            id,
+            is_super,
+            location_grants,
+            ..
+        } => Ok(AuthInfo::User {
+            id,
+            is_super,
+            location_grants,
+            token_id: Some(token_id),
+        }),
+        other => Ok(other),
+    }
+}
+
+pub async fn issue_user_token<A: App + HasDb>(app: &A, user_id: &str) -> Result<String> {
+    use sha2::{Digest, Sha256};
+    let secret = format!("{}{}", USER_TOKEN_PREFIX, crate::nonce::generate_nonce(32));
+    let hash = {
+        let mut hasher = Sha256::new();
+        hasher.update(secret.as_bytes());
+        hex::encode(hasher.finalize())
+    };
+    let expires_at = crate::expire::ExpirePolicy::UserTokenDefault.from_now();
+    app.db()
+        .create_user_token(&hash, user_id, expires_at)
+        .await?;
+    Ok(secret)
+}
+
 pub async fn verify_token<A: App + HasDb + HasSqs>(
     app: &A,
     token: &str,
@@ -283,6 +363,10 @@ pub async fn verify_token<A: App + HasDb + HasSqs>(
 ) -> Result<AuthInfo, AuthError> {
     if token.starts_with(API_TOKEN_PREFIX) {
         return verify_token_with_api_token(app, token).await;
+    }
+
+    if token.starts_with(USER_TOKEN_PREFIX) {
+        return verify_token_with_user_token(app, token).await;
     }
 
     let auth0_err = match verify_token_with_auth0(app, token).await {

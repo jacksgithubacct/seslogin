@@ -11,6 +11,16 @@ import { UserInfoProvider } from "./components/UserInfoProvider";
 import AdminRelayEnvironment from "./components/AdminRelayEnvironment";
 import { Outlet } from "react-router";
 import AdminLoginPage from "./components/AdminLoginPage";
+import {
+  getAdminToken,
+  setAdminToken,
+  clearAdminToken,
+} from "../lib/adminToken";
+import { getGraphQLEndpoint } from "../lib/api";
+import {
+  getCurrentClientVersion,
+  CLIENT_VERSION_HEADER,
+} from "../lib/clientVersion";
 
 export default function Layout() {
   return (
@@ -44,10 +54,13 @@ type AuthState = "loading" | "authenticated" | "unauthenticated";
 function LoginRequired() {
   const { isAuthenticated, loginWithPopup, logout, isLoading } = useAuth0();
   console.log("Auth0 loading:", isLoading, "authenticated:", isAuthenticated);
+
+  const hasStoredToken = getAdminToken() !== null;
+
   const [authState, setAuthState] = useState<AuthState>(
     isLoading
       ? "loading"
-      : isAuthenticated
+      : isAuthenticated || hasStoredToken
         ? "authenticated"
         : "unauthenticated",
   );
@@ -58,7 +71,7 @@ function LoginRequired() {
   useEffect(() => {
     if (authState === "loading" && !isLoading) {
       startTransition(() => {
-        if (isAuthenticated) {
+        if (isAuthenticated || getAdminToken() !== null) {
           setAuthState("authenticated");
         } else {
           setAuthState("unauthenticated");
@@ -68,6 +81,7 @@ function LoginRequired() {
   }, [isLoading, isAuthenticated, authState]);
 
   function onUnauthorized() {
+    clearAdminToken();
     setAuthState("unauthenticated");
     setAccessDenied(true);
   }
@@ -97,10 +111,39 @@ function LoginRequired() {
     }
   }
 
-  function onLogout() {
+  function onNewTokenReceived(token: string) {
+    setAdminToken(token);
+    setAccessDenied(false);
+    setLoginError(null);
+    startTransition(() => {
+      setAuthState("authenticated");
+    });
+  }
+
+  async function onLogout() {
+    const token = getAdminToken();
+    if (token) {
+      try {
+        await fetch(getGraphQLEndpoint(), {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+            [CLIENT_VERSION_HEADER]: getCurrentClientVersion(),
+          },
+          body: JSON.stringify({ query: "mutation { logout }" }),
+          cache: "no-store",
+        });
+      } catch {
+        // Ignore — token will expire via TTL regardless
+      }
+      clearAdminToken();
+    }
+    setAuthState("unauthenticated");
+    setAccessDenied(false);
     logout({
       logoutParams: {
-        returnTo: `${window.location.origin}/admin`,
+        returnTo: `${window.location.origin}/`,
       },
     });
   }
@@ -117,6 +160,7 @@ function LoginRequired() {
         isLoading={isLoggingIn}
         errorMessage={loginError}
         showUnauthorizedMessage={accessDenied}
+        onNewTokenReceived={onNewTokenReceived}
       />
     );
   }
@@ -130,7 +174,7 @@ function LoginRequired() {
         <ErrorBoundary FallbackComponent={PageErrorFallback}>
           <Suspense fallback={<LoadingIndicator />}>
             <UserInfoProvider>
-              <AdminContent>
+              <AdminContent onLogout={onLogout}>
                 <Suspense fallback={<LoadingIndicator />}>
                   <Outlet />
                 </Suspense>

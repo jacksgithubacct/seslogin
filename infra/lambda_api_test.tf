@@ -23,6 +23,7 @@ resource "aws_lambda_function" "test_api" {
       DB_BACKEND            = "dynamodb"
       DB_PREFIX             = var.db_prefix
       READ_ONLY             = "false"
+      TURNSTILE_SECRET_KEY  = var.turnstile_secret_key_test
     }
   }
 }

@@ -402,4 +402,51 @@ impl db::Handler for Handler {
     ) -> db::Result<Vec<db::TestPaginationRow>> {
         Self::unsupported()
     }
+
+    async fn put_login_code(
+        &self,
+        _email: &str,
+        _code_hash: &str,
+        _expires_at: u64,
+        _last_sent_at: u64,
+    ) -> db::Result<()> {
+        Self::unsupported()
+    }
+
+    async fn get_login_code(&self, _email: &str) -> db::Result<Option<db::LoginCode>> {
+        Self::unsupported()
+    }
+
+    async fn delete_login_code(&self, _email: &str) -> db::Result<()> {
+        Self::unsupported()
+    }
+
+    async fn increment_login_code_attempts(&self, _email: &str) -> db::Result<()> {
+        Self::unsupported()
+    }
+
+    async fn create_user_token(
+        &self,
+        _token_hash: &str,
+        _user_id: &str,
+        _expires_at: u64,
+    ) -> db::Result<db::UserToken> {
+        Self::unsupported()
+    }
+
+    async fn get_user_token_by_hash(&self, _token_hash: &str) -> db::Result<Option<db::UserToken>> {
+        Self::unsupported()
+    }
+
+    async fn update_user_token(
+        &self,
+        _id: &str,
+        _change: db::UserTokenUpdateShape,
+    ) -> db::Result<()> {
+        Self::unsupported()
+    }
+
+    async fn delete_user_token(&self, _id: &str) -> db::Result<()> {
+        Self::unsupported()
+    }
 }

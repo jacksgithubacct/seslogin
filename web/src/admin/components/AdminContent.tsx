@@ -10,21 +10,15 @@ import Footer from "./Footer";
 import LoadingIndicator from "../../components/LoadingIndicator";
 import PageErrorFallback from "../../components/PageErrorFallback";
 import LocationSelector from "./LocationSelector";
-import { useAuth0 } from "@auth0/auth0-react";
-
 interface AdminContentProps {
   children?: React.ReactNode;
+  onLogout: () => void;
 }
 
-export default function AdminContent({ children }: AdminContentProps) {
-  const { logout } = useAuth0();
-  function onLogout() {
-    logout({
-      logoutParams: {
-        returnTo: `${window.location.origin}/`,
-      },
-    });
-  }
+export default function AdminContent({
+  children,
+  onLogout,
+}: AdminContentProps) {
   const location = useLocation();
   const { email, isSuper, isDev } = useUserInfo();
 

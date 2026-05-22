@@ -32,6 +32,18 @@ variable "ses_api_key_test" {
   sensitive   = true
 }
 
+variable "turnstile_secret_key" {
+  description = "Cloudflare Turnstile secret key for the production environment"
+  type        = string
+  sensitive   = true
+}
+
+variable "turnstile_secret_key_test" {
+  description = "Cloudflare Turnstile secret key for the test environment"
+  type        = string
+  sensitive   = true
+}
+
 variable "db_prefix" {
   description = "DynamoDB table name prefix for the production environment (e.g. seslogin_prod_)"
   type        = string

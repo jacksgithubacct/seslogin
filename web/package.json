@@ -19,6 +19,7 @@
   },
   "dependencies": {
     "@auth0/auth0-react": "^2.13.0",
+    "@marsidev/react-turnstile": "^1.5.2",
     "exceljs": "^4.4.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",

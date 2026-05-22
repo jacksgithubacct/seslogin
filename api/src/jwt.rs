@@ -3,8 +3,9 @@ use chrono::{TimeZone, Utc};
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-use std::time::SystemTime;
 use tracing::debug;
+
+pub use crate::expire::{DEFAULT_SESSION_EXPIRE_S, DEFAULT_USER_EXPIRE_S, ExpirePolicy};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum JwtData {
@@ -18,21 +19,12 @@ pub struct ParsedJwt {
     pub data: JwtData,
 }
 
-pub const DEFAULT_USER_EXPIRE_S: u64 = 60 * 60 * 8;
-pub const DEFAULT_SESSION_EXPIRE_S: u64 = 60 * 60 * 24 * 14;
-
 #[derive(Debug)]
 pub struct Key {
     encoding: EncodingKey,
     decoding: DecodingKey,
     user_expire_s: u64,
     session_expire_s: u64,
-}
-
-pub enum ExpirePolicy {
-    UserDefault,
-    SessionDefault,
-    TimeSec(u64),
 }
 
 // TEMPORARY: Remove after 2026-06-01 — handles legacy JWTs where exp was serialized as a string
@@ -109,20 +101,8 @@ impl Key {
         })
     }
 
-    fn now_sec() -> u64 {
-        SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .as_secs()
-    }
-
     fn expiry(&self, policy: ExpirePolicy) -> u64 {
-        let now = Self::now_sec();
-        match policy {
-            ExpirePolicy::UserDefault => now + self.user_expire_s,
-            ExpirePolicy::SessionDefault => now + self.session_expire_s,
-            ExpirePolicy::TimeSec(sec) => now + sec,
-        }
+        policy.expires_at(self.user_expire_s, self.session_expire_s)
     }
 
     fn sign(&self, claims: Claims) -> Result<String> {

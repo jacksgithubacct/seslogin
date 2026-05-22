@@ -6,28 +6,25 @@ import {
   type FetchFunction,
 } from "relay-runtime";
 import { fetchGraphQL } from "./graphql";
-import type { GetTokenSilentlyOptions } from "@auth0/auth0-react";
 
-type GetAccessTokenFn = (
-  options?:
-    | (GetTokenSilentlyOptions & { detailedResponse?: false })
-    | undefined,
-) => Promise<string>;
+type GetTokenFn = () => Promise<string>;
 
 /**
- * Creates a Relay environment for admin routes that gets fresh tokens from Auth0
+ * Creates a Relay environment for admin routes.
+ * getToken is called per-request; it should prefer the stored opaque token
+ * and fall back to Auth0's getAccessTokenSilently.
  */
 export function createAdminGraphQLEnvironment(
-  getAccessTokenSilently: GetAccessTokenFn,
+  getToken: GetTokenFn,
   onTokenError: () => void,
   onUnauthorized: () => void,
 ): Environment {
   const _fetchGraphQL: FetchFunction = async (request, variables) => {
     let authToken: string;
     try {
-      authToken = await getAccessTokenSilently();
+      authToken = await getToken();
     } catch (err) {
-      console.error("Failed to get Auth0 token:", err);
+      console.error("Failed to get auth token:", err);
       onTokenError();
       throw new Error("Failed to get auth token", { cause: err });
     }

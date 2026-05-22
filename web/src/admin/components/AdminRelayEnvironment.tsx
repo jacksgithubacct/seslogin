@@ -1,12 +1,13 @@
 import { RelayEnvironmentProvider } from "react-relay";
 import { useAuth0 } from "@auth0/auth0-react";
-import { Suspense, useMemo, type ReactNode } from "react";
+import { Suspense, useCallback, useMemo, type ReactNode } from "react";
 import { createAdminGraphQLEnvironment } from "../../lib/environments";
 import LoadingIndicator from "../../components/LoadingIndicator";
+import { getAdminToken } from "../../lib/adminToken";
 
 /**
- * Relay environment provider for admin routes
- * Provides a Relay environment with direct access to Auth0 tokens
+ * Relay environment provider for admin routes.
+ * Uses the stored opaque admin token if present, falling back to Auth0.
  */
 export default function AdminRelayEnvironment({
   onUnauthorized,
@@ -19,16 +20,22 @@ export default function AdminRelayEnvironment({
 }) {
   const { getAccessTokenSilently } = useAuth0();
 
-  // Pass getAccessTokenSilently directly so it's called lazily per-request.
+  const getToken = useCallback(async () => {
+    const stored = getAdminToken();
+    if (stored) return stored;
+    return await getAccessTokenSilently();
+  }, [getAccessTokenSilently]);
+
+  // Pass getToken directly so it's called lazily per-request.
   // This keeps the Environment object stable across renders, preserving the
   // Relay store and preventing the Suspense remount loop.
   const environment = useMemo(() => {
     return createAdminGraphQLEnvironment(
-      getAccessTokenSilently,
+      getToken,
       onTokenError,
       onUnauthorized,
     );
-  }, [getAccessTokenSilently, onTokenError, onUnauthorized]);
+  }, [getToken, onTokenError, onUnauthorized]);
 
   // The Suspense boundary must be INSIDE RelayEnvironmentProvider so that when
   // UserInfoProvider suspends, this component (and its Environment) stays

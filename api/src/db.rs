@@ -332,6 +332,30 @@ impl HasID for Category {
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct LoginCode {
+    pub email: String,
+    pub code_hash: String,
+    pub expires_at: u64,
+    pub attempts: u64,
+    pub last_sent_at: u64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct UserToken {
+    pub id: String,
+    pub token_hash: String,
+    pub user_id: String,
+    pub created_at: u64,
+    pub expires_at: u64,
+    pub last_used_at: Option<u64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum UserTokenUpdateShape {
+    TouchLastUsed,
+}
+
 pub trait Handler {
     fn get_users<T: AsRef<str> + Sync>(
         &self,
@@ -617,4 +641,44 @@ pub trait Handler {
         event_id: &str,
         synced_version: u64,
     ) -> impl Future<Output = Result<()>> + Send;
+
+    // ── Email login codes ────────────────────────────────────────────────────
+
+    fn put_login_code(
+        &self,
+        email: &str,
+        code_hash: &str,
+        expires_at: u64,
+        last_sent_at: u64,
+    ) -> impl Future<Output = Result<()>> + Send;
+
+    fn get_login_code(&self, email: &str)
+    -> impl Future<Output = Result<Option<LoginCode>>> + Send;
+
+    fn delete_login_code(&self, email: &str) -> impl Future<Output = Result<()>> + Send;
+
+    fn increment_login_code_attempts(&self, email: &str)
+    -> impl Future<Output = Result<()>> + Send;
+
+    // ── User tokens (opaque, hashed, sliding expiry) ─────────────────────────
+
+    fn create_user_token(
+        &self,
+        token_hash: &str,
+        user_id: &str,
+        expires_at: u64,
+    ) -> impl Future<Output = Result<UserToken>> + Send;
+
+    fn get_user_token_by_hash(
+        &self,
+        token_hash: &str,
+    ) -> impl Future<Output = Result<Option<UserToken>>> + Send;
+
+    fn update_user_token(
+        &self,
+        id: &str,
+        change: UserTokenUpdateShape,
+    ) -> impl Future<Output = Result<()>> + Send;
+
+    fn delete_user_token(&self, id: &str) -> impl Future<Output = Result<()>> + Send;
 }
