@@ -356,6 +356,39 @@ pub enum UserTokenUpdateShape {
     TouchLastUsed,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct WebauthnCredential {
+    /// Credential ID (base64url) — partition key in DynamoDB.
+    pub id: String,
+    pub user_id: String,
+    /// User-supplied label (e.g. "MacBook Touch ID").
+    pub name: String,
+    /// JSON-serialized webauthn_rs::prelude::Passkey (contains counter, public key, etc.).
+    pub passkey_json: String,
+    pub created_at: u64,
+    pub last_used_at: Option<u64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum WebauthnCredentialUpdate {
+    Rename(String),
+    TouchLastUsed { passkey_json: String },
+}
+
+/// Short-lived challenge state stored between the two WebAuthn round-trips.
+#[derive(Clone, Debug, PartialEq)]
+pub struct WebauthnState {
+    /// Opaque challenge ID returned to the client.
+    pub id: String,
+    pub kind: String,
+    /// Set for registration states.
+    pub user_id: Option<String>,
+    /// JSON-serialized PasskeyRegistration or DiscoverableAuthentication.
+    pub state_json: String,
+    /// Unix timestamp; DynamoDB TTL auto-deletes after this.
+    pub expires_at: u64,
+}
+
 pub trait Handler {
     fn get_users<T: AsRef<str> + Sync>(
         &self,
@@ -681,4 +714,55 @@ pub trait Handler {
     ) -> impl Future<Output = Result<()>> + Send;
 
     fn delete_user_token(&self, id: &str) -> impl Future<Output = Result<()>> + Send;
+
+    // ── WebAuthn passkey credentials ─────────────────────────────────────────
+
+    fn create_webauthn_credential(
+        &self,
+        id: &str,
+        user_id: &str,
+        name: &str,
+        passkey_json: &str,
+    ) -> impl Future<Output = Result<WebauthnCredential>> + Send;
+
+    fn get_webauthn_credential(
+        &self,
+        id: &str,
+    ) -> impl Future<Output = Result<Option<WebauthnCredential>>> + Send;
+
+    fn list_webauthn_credentials_by_user(
+        &self,
+        user_id: &str,
+    ) -> impl Future<Output = Result<Vec<WebauthnCredential>>> + Send;
+
+    fn count_webauthn_credentials_by_user(
+        &self,
+        user_id: &str,
+    ) -> impl Future<Output = Result<usize>> + Send;
+
+    fn update_webauthn_credential(
+        &self,
+        id: &str,
+        change: WebauthnCredentialUpdate,
+    ) -> impl Future<Output = Result<()>> + Send;
+
+    fn delete_webauthn_credential(&self, id: &str) -> impl Future<Output = Result<()>> + Send;
+
+    // ── WebAuthn challenge state ──────────────────────────────────────────────
+
+    fn put_webauthn_state(
+        &self,
+        id: &str,
+        kind: &str,
+        user_id: Option<&str>,
+        state_json: &str,
+        expires_at: u64,
+    ) -> impl Future<Output = Result<()>> + Send;
+
+    fn get_webauthn_state(
+        &self,
+        id: &str,
+    ) -> impl Future<Output = Result<Option<WebauthnState>>> + Send;
+
+    fn delete_webauthn_state(&self, id: &str) -> impl Future<Output = Result<()>> + Send;
 }

@@ -57,6 +57,25 @@
   background-color: #c66c51;
 }
 
+.passkey-benefits {
+  list-style: none;
+  margin: 0 0 24px 0;
+  padding: 0;
+  display: grid;
+  gap: 14px;
+}
+
+.passkey-benefits li {
+  margin: 0;
+  padding: 14px 16px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.82);
+  border: 1px solid rgba(31, 61, 121, 0.12);
+  color: #2c2c2c;
+  line-height: 1.45;
+  text-align: left;
+}
+
 #admin div#content {
   padding: 20px 3% 20px 3%;
 }

@@ -17,8 +17,8 @@ pub mod query;
 pub use self::mutations::MutationRoot;
 pub use self::query::{
     ApiToken, Category, CategoryMemberPeriodSummary, CategoryPeriodSummary, Location,
-    MemberCategoryPeriodSummary, MemberPeriodSummary, NitcExportStatus, NitcGroup, Period, Person,
-    QueryRoot, Session, User,
+    MemberCategoryPeriodSummary, MemberPeriodSummary, NitcExportStatus, NitcGroup, PasskeyInfo,
+    Period, Person, QueryRoot, Session, User,
 };
 
 use self::dataloader::DatabaseLoader;
@@ -46,6 +46,7 @@ pub struct NitcEventId(pub String);
 
 pub fn build_schema<A: App + HasDb + HasSqs + Send + Sync + 'static>(
     app: Arc<A>,
+    webauthn: Arc<webauthn_rs::prelude::Webauthn>,
 ) -> Schema<QueryRoot<A>, MutationRoot<A>, EmptySubscription> {
     Schema::build(
         QueryRoot::new(),
@@ -54,6 +55,7 @@ pub fn build_schema<A: App + HasDb + HasSqs + Send + Sync + 'static>(
         EmptySubscription,
     )
     .data(app.clone())
+    .data(webauthn)
     .finish()
 }
 

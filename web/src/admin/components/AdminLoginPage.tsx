@@ -1,12 +1,21 @@
 import { Turnstile, type TurnstileInstance } from "@marsidev/react-turnstile";
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { getGraphQLEndpoint } from "../../lib/api";
 import {
   getCurrentClientVersion,
   CLIENT_VERSION_HEADER,
 } from "../../lib/clientVersion";
+import {
+  loginWithPasskey,
+  browserSupportsWebAuthn,
+  browserSupportsWebAuthnAutofill,
+} from "../../lib/passkey";
 
 interface AdminLoginPageProps {
+  /**
+   * Triggers the Auth0 popup sign-in. Currently not rendered (the Auth0 button
+   * was removed) but kept wired up so it can be re-enabled easily.
+   */
   onLogin: () => void | Promise<void>;
   onLogout?: () => void | Promise<void>;
   isLoading?: boolean;
@@ -40,7 +49,7 @@ async function callMutation(
 }
 
 export default function AdminLoginPage({
-  onLogin,
+  // onLogin (Auth0) intentionally not consumed — the button was removed.
   onLogout,
   isLoading = false,
   errorMessage,
@@ -52,7 +61,58 @@ export default function AdminLoginPage({
   const [code, setCode] = useState("");
   const [turnstileToken, setTurnstileToken] = useState<string | null>(null);
   const [codeError, setCodeError] = useState<string | null>(null);
+  const [passkeySigningIn, setPasskeySigningIn] = useState(false);
+  const [passkeyError, setPasskeyError] = useState<string | null>(null);
   const turnstileRef = useRef<TurnstileInstance | null>(null);
+  const passkeySupported = browserSupportsWebAuthn();
+  const onNewTokenReceivedRef = useRef(onNewTokenReceived);
+  useEffect(() => {
+    onNewTokenReceivedRef.current = onNewTokenReceived;
+  }, [onNewTokenReceived]);
+
+  // Transparent passkey login: when the page loads, prime a discoverable
+  // challenge and attach it to the email field via browser autofill. If the
+  // user picks a saved passkey we log them straight in; otherwise this is a
+  // no-op and the email-code / Auth0 flows remain available.
+  useEffect(() => {
+    if (showUnauthorizedMessage) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        if (!(await browserSupportsWebAuthnAutofill())) return;
+        const token = await loginWithPasskey({ useAutofill: true });
+        if (!cancelled && token) {
+          onNewTokenReceivedRef.current(token);
+        }
+      } catch {
+        // Conditional UI unsupported or aborted — ignore silently.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [showUnauthorizedMessage]);
+
+  // Manual passkey sign-in (modal prompt) — fallback for browsers where the
+  // autofill/conditional-UI path doesn't surface saved passkeys.
+  async function handlePasskeyLogin() {
+    setPasskeySigningIn(true);
+    setPasskeyError(null);
+    try {
+      const token = await loginWithPasskey({ useAutofill: false });
+      if (token) {
+        onNewTokenReceived(token);
+      } else {
+        setPasskeyError(
+          "No passkey was used. Make sure you've added one, or sign in another way.",
+        );
+      }
+    } catch {
+      setPasskeyError("Passkey sign-in failed. Please try again.");
+    } finally {
+      setPasskeySigningIn(false);
+    }
+  }
 
   async function handleSendCode(e: React.FormEvent) {
     e.preventDefault();
@@ -122,16 +182,30 @@ export default function AdminLoginPage({
           </div>
         ) : null}
 
-        {/* Auth0 login */}
-        {!showUnauthorizedMessage && (
+        {/*
+          Auth0 sign-in button removed (handler `onLogin` retained for now).
+          The Auth0 flow still works and can be re-enabled by rendering a
+          button wired to onLogin.
+        */}
+
+        {/* Manual passkey login (fallback when autofill doesn't surface it) */}
+        {!showUnauthorizedMessage && passkeySupported && (
           <button
             type="button"
             className="action-button action-panel__button"
-            onClick={onLogin}
-            disabled={isLoading || step === "sending" || step === "verifying"}
+            onClick={handlePasskeyLogin}
+            disabled={passkeySigningIn || isLoading}
           >
-            {isLoading ? "Waiting for sign-in..." : "Sign-in via email (Auth0)"}
+            {passkeySigningIn
+              ? "Waiting for passkey..."
+              : "Sign in via passkey"}
           </button>
+        )}
+
+        {passkeyError && (
+          <div className="action-panel__message action-panel__message--error">
+            {passkeyError}
+          </div>
         )}
 
         {showUnauthorizedMessage && onLogout ? (
@@ -145,8 +219,8 @@ export default function AdminLoginPage({
           </button>
         ) : null}
 
-        {/* Divider */}
-        {!showUnauthorizedMessage && (
+        {/* Divider — only when there's a button above it (passkey) */}
+        {!showUnauthorizedMessage && passkeySupported && (
           <div
             style={{ margin: "1.5rem 0", textAlign: "center", color: "#888" }}
           >
@@ -169,6 +243,7 @@ export default function AdminLoginPage({
               type="email"
               className="action-panel__input"
               placeholder="Email address"
+              autoComplete="username webauthn"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               required

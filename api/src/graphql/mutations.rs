@@ -20,7 +20,7 @@ use crate::db::Handler;
 use hex;
 
 use super::auth::{AuthGuard, AuthRequirement, require_location_access, require_writable};
-use super::{ApiToken, Category, Location, NitcGroup, Period, Person, Session, User};
+use super::{ApiToken, Category, Location, NitcGroup, PasskeyInfo, Period, Person, Session, User};
 
 async fn enqueue_nitc_export(sqs: &crate::sqs_dispatch::SqsQueue, period_id: &str) {
     if let Err(e) =
@@ -1152,4 +1152,395 @@ impl<A: App + HasDb + HasSqs + Send + Sync + 'static> MutationRoot<A> {
             .ok_or_else(|| anyhow!("User missing after update"))?;
         Ok(User::new(rec))
     }
+
+    // ── Passkey (WebAuthn) mutations ─────────────────────────────────────────
+
+    /// Start passkey registration for the authenticated user.
+    /// Returns a JSON challenge to pass to the browser's WebAuthn API.
+    #[graphql(guard = "AuthGuard::new(AuthRequirement::User)")]
+    async fn begin_passkey_registration(&self, ctx: &Context<'_>) -> Result<PasskeyChallenge> {
+        use webauthn_rs::prelude::*;
+
+        let user_id = match ctx.data_opt::<AuthInfo>() {
+            Some(AuthInfo::User { id, .. }) => id.clone(),
+            _ => return Err(anyhow!("Not authenticated")),
+        };
+
+        let count = self
+            .app
+            .db()
+            .count_webauthn_credentials_by_user(&user_id)
+            .await?;
+        if count >= 10 {
+            return Err(anyhow!("Maximum of 10 passkeys allowed"));
+        }
+
+        let existing = self
+            .app
+            .db()
+            .list_webauthn_credentials_by_user(&user_id)
+            .await?;
+
+        let webauthn = ctx.data_unchecked::<Arc<Webauthn>>();
+
+        // The user handle stays tied to the (immutable) user id so a passkey
+        // keeps working if the user's email changes. Only the display name —
+        // what the OS/password manager shows — uses the email.
+        let user_uuid = uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_OID, user_id.as_bytes());
+        let display_name = self
+            .app
+            .db()
+            .get_users(&[&user_id])
+            .await?
+            .into_iter()
+            .next()
+            .flatten()
+            .and_then(|u| u.email)
+            .unwrap_or_else(|| user_id.clone());
+
+        let existing_cred_ids: Vec<CredentialID> = existing
+            .iter()
+            .filter_map(|c| {
+                serde_json::from_str::<Passkey>(&c.passkey_json)
+                    .ok()
+                    .map(|pk| pk.cred_id().clone())
+            })
+            .collect();
+
+        let exclude = if existing_cred_ids.is_empty() {
+            None
+        } else {
+            Some(existing_cred_ids)
+        };
+
+        let (ccr, reg_state) = webauthn.start_passkey_registration(
+            user_uuid,
+            &display_name,
+            &display_name,
+            exclude,
+        )?;
+
+        // Force the credential to be discoverable (a resident key). webauthn-rs
+        // 0.4 only emits the legacy `requireResidentKey: false` and no modern
+        // `residentKey` field, so platform authenticators make it discoverable
+        // but security keys may not — and a non-discoverable credential can't be
+        // used by our usernameless login. Inject `residentKey: "required"` into
+        // the options before handing them to the browser. (finish_* doesn't
+        // validate residency, so there's no verification mismatch.)
+        let mut options_value = serde_json::to_value(&ccr.public_key)
+            .map_err(|e| anyhow!("Failed to serialize registration options: {}", e))?;
+        if let Some(sel) = options_value
+            .get_mut("authenticatorSelection")
+            .and_then(|v| v.as_object_mut())
+        {
+            sel.insert("residentKey".to_string(), serde_json::json!("required"));
+            sel.insert("requireResidentKey".to_string(), serde_json::json!(true));
+        }
+        let options_json = serde_json::to_string(&options_value)
+            .map_err(|e| anyhow!("Failed to serialize registration options: {}", e))?;
+        let state_json = serde_json::to_string(&reg_state)
+            .map_err(|e| anyhow!("Failed to serialize registration state: {}", e))?;
+
+        let challenge_id = nanoid::nanoid!(32);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let expires_at = now + 5 * 60;
+
+        self.app
+            .db()
+            .put_webauthn_state(
+                &challenge_id,
+                "reg",
+                Some(&user_id),
+                &state_json,
+                expires_at,
+            )
+            .await?;
+
+        Ok(PasskeyChallenge {
+            challenge_id,
+            options_json,
+        })
+    }
+
+    /// Finish passkey registration: verify the browser response and store the credential.
+    #[graphql(guard = "AuthGuard::new(AuthRequirement::User)")]
+    async fn finish_passkey_registration(
+        &self,
+        ctx: &Context<'_>,
+        challenge_id: String,
+        credential_json: String,
+        name: String,
+    ) -> Result<PasskeyInfo> {
+        use webauthn_rs::prelude::*;
+
+        let user_id = match ctx.data_opt::<AuthInfo>() {
+            Some(AuthInfo::User { id, .. }) => id.clone(),
+            _ => return Err(anyhow!("Not authenticated")),
+        };
+
+        let state_record = self
+            .app
+            .db()
+            .get_webauthn_state(&challenge_id)
+            .await?
+            .ok_or_else(|| anyhow!("Registration challenge not found or expired"))?;
+
+        if state_record.kind != "reg" {
+            return Err(anyhow!("Invalid challenge kind"));
+        }
+        if state_record.user_id.as_deref() != Some(&user_id) {
+            return Err(anyhow!("Challenge belongs to a different user"));
+        }
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        if now >= state_record.expires_at {
+            let _ = self.app.db().delete_webauthn_state(&challenge_id).await;
+            return Err(anyhow!("Registration challenge expired"));
+        }
+
+        let reg_state: PasskeyRegistration = serde_json::from_str(&state_record.state_json)
+            .map_err(|e| anyhow!("Failed to deserialize registration state: {}", e))?;
+
+        let reg_credential: RegisterPublicKeyCredential = serde_json::from_str(&credential_json)
+            .map_err(|e| anyhow!("Failed to parse credential: {}", e))?;
+
+        let webauthn = ctx.data_unchecked::<Arc<Webauthn>>();
+        let passkey = webauthn
+            .finish_passkey_registration(&reg_credential, &reg_state)
+            .map_err(|e| anyhow!("Passkey registration failed: {}", e))?;
+
+        // Re-check cap to guard against races
+        let count = self
+            .app
+            .db()
+            .count_webauthn_credentials_by_user(&user_id)
+            .await?;
+        if count >= 10 {
+            let _ = self.app.db().delete_webauthn_state(&challenge_id).await;
+            return Err(anyhow!("Maximum of 10 passkeys allowed"));
+        }
+
+        let cred_id = passkey.cred_id().to_string();
+        let passkey_json = serde_json::to_string(&passkey)
+            .map_err(|e| anyhow!("Failed to serialize passkey: {}", e))?;
+
+        let cred = self
+            .app
+            .db()
+            .create_webauthn_credential(&cred_id, &user_id, &name, &passkey_json)
+            .await?;
+
+        let _ = self.app.db().delete_webauthn_state(&challenge_id).await;
+
+        info!(
+            "Passkey registered for user_id={} cred_id={}",
+            user_id, cred_id
+        );
+
+        Ok(PasskeyInfo {
+            id: cred.id,
+            name: cred.name,
+            created_at: cred.created_at as i64,
+            last_used_at: None,
+        })
+    }
+
+    /// Start a discoverable passkey login (no username required).
+    /// Returns a JSON challenge to pass to the browser's WebAuthn API.
+    async fn begin_passkey_login(&self, ctx: &Context<'_>) -> Result<PasskeyChallenge> {
+        use webauthn_rs::prelude::*;
+
+        let webauthn = ctx.data_unchecked::<Arc<Webauthn>>();
+        let (rcr, auth_state) = webauthn
+            .start_discoverable_authentication()
+            .map_err(|e| anyhow!("Failed to start passkey login: {}", e))?;
+
+        let options_json = serde_json::to_string(&rcr.public_key)
+            .map_err(|e| anyhow!("Failed to serialize login options: {}", e))?;
+        let state_json = serde_json::to_string(&auth_state)
+            .map_err(|e| anyhow!("Failed to serialize auth state: {}", e))?;
+
+        let challenge_id = nanoid::nanoid!(32);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let expires_at = now + 5 * 60;
+
+        self.app
+            .db()
+            .put_webauthn_state(&challenge_id, "auth", None, &state_json, expires_at)
+            .await?;
+
+        Ok(PasskeyChallenge {
+            challenge_id,
+            options_json,
+        })
+    }
+
+    /// Finish passkey login: verify the browser response and return an opaque session token.
+    async fn finish_passkey_login(
+        &self,
+        ctx: &Context<'_>,
+        challenge_id: String,
+        credential_json: String,
+    ) -> Result<Option<String>> {
+        use webauthn_rs::prelude::*;
+
+        let state_record = self
+            .app
+            .db()
+            .get_webauthn_state(&challenge_id)
+            .await?
+            .ok_or_else(|| anyhow!("Login challenge not found or expired"))?;
+
+        if state_record.kind != "auth" {
+            return Err(anyhow!("Invalid challenge kind"));
+        }
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        if now >= state_record.expires_at {
+            let _ = self.app.db().delete_webauthn_state(&challenge_id).await;
+            return Ok(None);
+        }
+
+        let auth_state: DiscoverableAuthentication = serde_json::from_str(&state_record.state_json)
+            .map_err(|e| anyhow!("Failed to deserialize auth state: {}", e))?;
+
+        let auth_credential: PublicKeyCredential = serde_json::from_str(&credential_json)
+            .map_err(|_| anyhow!("Failed to parse credential"))?;
+
+        let webauthn = ctx.data_unchecked::<Arc<Webauthn>>();
+        let (_user_handle, cred_id_bytes) = webauthn
+            .identify_discoverable_authentication(&auth_credential)
+            .map_err(|e| anyhow!("Failed to identify credential: {}", e))?;
+
+        let cred_id_str =
+            webauthn_rs::prelude::Base64UrlSafeData(cred_id_bytes.to_vec()).to_string();
+        let stored = match self.app.db().get_webauthn_credential(&cred_id_str).await? {
+            Some(c) => c,
+            None => {
+                info!("finish_passkey_login: unknown credential {}", cred_id_str);
+                let _ = self.app.db().delete_webauthn_state(&challenge_id).await;
+                return Ok(None);
+            }
+        };
+
+        let mut passkey: Passkey = serde_json::from_str(&stored.passkey_json)
+            .map_err(|e| anyhow!("Failed to deserialize stored passkey: {}", e))?;
+
+        let auth_result = webauthn
+            .finish_discoverable_authentication(
+                &auth_credential,
+                auth_state,
+                &[DiscoverableKey::from(&passkey)],
+            )
+            .map_err(|e| anyhow!("Passkey authentication failed: {}", e))?;
+
+        // Persist counter update if needed
+        if auth_result.needs_update() {
+            passkey.update_credential(&auth_result);
+            let updated_json = serde_json::to_string(&passkey)
+                .map_err(|e| anyhow!("Failed to serialize updated passkey: {}", e))?;
+            let _ = self
+                .app
+                .db()
+                .update_webauthn_credential(
+                    &cred_id_str,
+                    db::WebauthnCredentialUpdate::TouchLastUsed {
+                        passkey_json: updated_json,
+                    },
+                )
+                .await;
+        }
+
+        let _ = self.app.db().delete_webauthn_state(&challenge_id).await;
+
+        let token = auth::issue_user_token(&*self.app, &stored.user_id).await?;
+        info!(
+            "Passkey login for user_id={} cred_id={}",
+            stored.user_id, cred_id_str
+        );
+        Ok(Some(token))
+    }
+
+    /// Rename one of the authenticated user's passkeys.
+    #[graphql(guard = "AuthGuard::new(AuthRequirement::User)")]
+    async fn rename_passkey(
+        &self,
+        ctx: &Context<'_>,
+        id: String,
+        name: String,
+    ) -> Result<PasskeyInfo> {
+        let user_id = match ctx.data_opt::<AuthInfo>() {
+            Some(AuthInfo::User { id, .. }) => id.clone(),
+            _ => return Err(anyhow!("Not authenticated")),
+        };
+
+        let cred = self
+            .app
+            .db()
+            .get_webauthn_credential(&id)
+            .await?
+            .ok_or_else(|| anyhow!("Passkey not found"))?;
+
+        if cred.user_id != user_id {
+            return Err(anyhow!("Passkey not found"));
+        }
+
+        let trimmed = name.trim().to_string();
+        if trimmed.is_empty() {
+            return Err(anyhow!("Name cannot be empty"));
+        }
+
+        self.app
+            .db()
+            .update_webauthn_credential(&id, db::WebauthnCredentialUpdate::Rename(trimmed.clone()))
+            .await?;
+
+        Ok(PasskeyInfo {
+            id: cred.id,
+            name: trimmed,
+            created_at: cred.created_at as i64,
+            last_used_at: cred.last_used_at.map(|t| t as i64),
+        })
+    }
+
+    /// Delete one of the authenticated user's passkeys.
+    #[graphql(guard = "AuthGuard::new(AuthRequirement::User)")]
+    async fn delete_passkey(&self, ctx: &Context<'_>, id: String) -> Result<bool> {
+        let user_id = match ctx.data_opt::<AuthInfo>() {
+            Some(AuthInfo::User { id, .. }) => id.clone(),
+            _ => return Err(anyhow!("Not authenticated")),
+        };
+
+        let cred = self
+            .app
+            .db()
+            .get_webauthn_credential(&id)
+            .await?
+            .ok_or_else(|| anyhow!("Passkey not found"))?;
+
+        if cred.user_id != user_id {
+            return Err(anyhow!("Passkey not found"));
+        }
+
+        self.app.db().delete_webauthn_credential(&id).await?;
+        Ok(true)
+    }
+}
+
+#[derive(async_graphql::SimpleObject)]
+struct PasskeyChallenge {
+    challenge_id: String,
+    options_json: String,
 }

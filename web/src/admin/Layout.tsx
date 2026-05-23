@@ -11,6 +11,8 @@ import { UserInfoProvider } from "./components/UserInfoProvider";
 import AdminRelayEnvironment from "./components/AdminRelayEnvironment";
 import { Outlet } from "react-router";
 import AdminLoginPage from "./components/AdminLoginPage";
+import PasskeyEnrollPrompt from "./components/PasskeyEnrollPrompt";
+import { clearPasskeyLoginSession } from "../lib/passkey";
 import {
   getAdminToken,
   setAdminToken,
@@ -139,6 +141,7 @@ function LoginRequired() {
       }
       clearAdminToken();
     }
+    clearPasskeyLoginSession();
     setAuthState("unauthenticated");
     setAccessDenied(false);
     logout({
@@ -174,11 +177,13 @@ function LoginRequired() {
         <ErrorBoundary FallbackComponent={PageErrorFallback}>
           <Suspense fallback={<LoadingIndicator />}>
             <UserInfoProvider>
-              <AdminContent onLogout={onLogout}>
-                <Suspense fallback={<LoadingIndicator />}>
-                  <Outlet />
-                </Suspense>
-              </AdminContent>
+              <PasskeyEnrollPrompt>
+                <AdminContent onLogout={onLogout}>
+                  <Suspense fallback={<LoadingIndicator />}>
+                    <Outlet />
+                  </Suspense>
+                </AdminContent>
+              </PasskeyEnrollPrompt>
             </UserInfoProvider>
           </Suspense>
         </ErrorBoundary>

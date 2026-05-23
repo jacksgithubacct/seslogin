@@ -28,7 +28,8 @@ async fn main() -> Result<()> {
         },
     };
     let app = Arc::new(app::new(db, key, 0, sqs));
-    let schema = graphql::build_schema(app);
+    let webauthn = Arc::new(app::build_webauthn()?);
+    let schema = graphql::build_schema(app, webauthn);
 
     print!("{}", schema.sdl());
 

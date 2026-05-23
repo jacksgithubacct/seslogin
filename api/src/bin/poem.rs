@@ -127,8 +127,9 @@ async fn run_server<H: db::Handler + Send + Sync + 'static>(
     response_lag_ms: u64,
     sqs: SqsQueues,
 ) -> Result<(), Box<dyn Error>> {
+    let webauthn = Arc::new(app::build_webauthn()?);
     let app = Arc::new(app::new(db, key, response_lag_ms, sqs));
-    let schema = graphql::build_schema(app.clone());
+    let schema = graphql::build_schema(app.clone(), webauthn);
     std::fs::write("schema.graphql", schema.sdl())?;
     let allow_cross_origin = Cors::new();
     let routes = Route::new()

@@ -12,13 +12,15 @@ resource "aws_lambda_function" "api" {
       JWT_SECRET            = var.jwt_secret
       SES_API_KEY           = var.ses_api_key
       SES_API_BASE_URL      = var.ses_api_base_url
-      MEMBER_SYNC_QUEUE_URL  = aws_sqs_queue.member_sync.url
-      NITC_EXPORT_QUEUE_URL  = aws_sqs_queue.nitc_export.url
-      HEALTHCHECK_QUEUE_URL  = aws_sqs_queue.healthcheck.url
+      MEMBER_SYNC_QUEUE_URL = aws_sqs_queue.member_sync.url
+      NITC_EXPORT_QUEUE_URL = aws_sqs_queue.nitc_export.url
+      HEALTHCHECK_QUEUE_URL = aws_sqs_queue.healthcheck.url
       DB_BACKEND            = "dynamodb"
       DB_PREFIX             = var.db_prefix
       READ_ONLY             = "false"
       TURNSTILE_SECRET_KEY  = var.turnstile_secret_key
+      WEBAUTHN_RP_ID        = "seslogin.com"
+      WEBAUTHN_RP_ORIGIN    = "https://new.seslogin.com,https://seslogin.com"
     }
   }
 

@@ -1,5 +1,5 @@
 /**
- * @generated SignedSource<<a6cb7f2df5bcf4956b657ce38f2b1b90>>
+ * @generated SignedSource<<93f2ac293695bb8a0cafc9fb7f79c931>>
  * @lightSyntaxTransform
  * @nogrep
  */
@@ -18,6 +18,12 @@ export type SettingsQuery$data = {
       readonly id: string;
       readonly name: string;
     }>;
+    readonly passkeys: ReadonlyArray<{
+      readonly createdAt: number;
+      readonly id: string;
+      readonly lastUsedAt: number | null | undefined;
+      readonly name: string;
+    }>;
   };
 };
 export type SettingsQuery = {
@@ -33,7 +39,14 @@ var v0 = {
   "name": "id",
   "storageKey": null
 },
-v1 = [
+v1 = {
+  "alias": null,
+  "args": null,
+  "kind": "ScalarField",
+  "name": "name",
+  "storageKey": null
+},
+v2 = [
   {
     "alias": null,
     "args": null,
@@ -59,11 +72,32 @@ v1 = [
         "plural": true,
         "selections": [
           (v0/*: any*/),
+          (v1/*: any*/)
+        ],
+        "storageKey": null
+      },
+      {
+        "alias": null,
+        "args": null,
+        "concreteType": "PasskeyInfo",
+        "kind": "LinkedField",
+        "name": "passkeys",
+        "plural": true,
+        "selections": [
+          (v0/*: any*/),
+          (v1/*: any*/),
           {
             "alias": null,
             "args": null,
             "kind": "ScalarField",
-            "name": "name",
+            "name": "createdAt",
+            "storageKey": null
+          },
+          {
+            "alias": null,
+            "args": null,
+            "kind": "ScalarField",
+            "name": "lastUsedAt",
             "storageKey": null
           }
         ],
@@ -79,7 +113,7 @@ return {
     "kind": "Fragment",
     "metadata": null,
     "name": "SettingsQuery",
-    "selections": (v1/*: any*/),
+    "selections": (v2/*: any*/),
     "type": "QueryRoot",
     "abstractKey": null
   },
@@ -88,19 +122,19 @@ return {
     "argumentDefinitions": [],
     "kind": "Operation",
     "name": "SettingsQuery",
-    "selections": (v1/*: any*/)
+    "selections": (v2/*: any*/)
   },
   "params": {
-    "cacheID": "8acd4dfddfa2e48496bb400d4280048b",
+    "cacheID": "8b95f80b4f801c04fa615385876cf2a9",
     "id": null,
     "metadata": {},
     "name": "SettingsQuery",
     "operationKind": "query",
-    "text": "query SettingsQuery {\n  user {\n    id\n    emailSummaryLocationIds\n    locations {\n      id\n      name\n    }\n  }\n}\n"
+    "text": "query SettingsQuery {\n  user {\n    id\n    emailSummaryLocationIds\n    locations {\n      id\n      name\n    }\n    passkeys {\n      id\n      name\n      createdAt\n      lastUsedAt\n    }\n  }\n}\n"
   }
 };
 })();
 
-(node as any).hash = "2fcde3244a8ae6668850c08c0ef5e134";
+(node as any).hash = "6fb2ec37c20753750d9b0fbe4e916aad";
 
 export default node;

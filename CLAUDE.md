@@ -132,3 +132,4 @@ Environment variables (loaded from `.env` and `.env.secret`):
 - `SES_API_BASE_URL` / `SES_API_KEY` — External member sync API
 - `MEMBER_SYNC_QUEUE_URL` — SQS queue URL used by the dispatcher Lambda
 - `RUST_LOG` — Log level (e.g., `info`, `debug`)
+- `WEBAUTHN_RP_ID` / `WEBAUTHN_RP_ORIGIN` — Passkey relying-party ID and origin. Local dev defaults to `localhost` / `http://localhost:5173`; deployed envs use `seslogin.com` / the site origin (e.g. `https://new.seslogin.com`). A passkey is bound to the RP ID it was registered under, so local-dev passkeys won't work in prod.

@@ -118,6 +118,32 @@ type MutationRoot {
 	scanSignOut(id: ID!, startTime: Int!, endTime: Int!, categoryId: ID!): Period!
 	enqueueMemberSync(locationId: ID!): Boolean!
 	updateMyEmailConfig(dailyLocationIds: [String!]!): User!
+	"""
+	Start passkey registration for the authenticated user.
+	Returns a JSON challenge to pass to the browser's WebAuthn API.
+	"""
+	beginPasskeyRegistration: PasskeyChallenge!
+	"""
+	Finish passkey registration: verify the browser response and store the credential.
+	"""
+	finishPasskeyRegistration(challengeId: String!, credentialJson: String!, name: String!): PasskeyInfo!
+	"""
+	Start a discoverable passkey login (no username required).
+	Returns a JSON challenge to pass to the browser's WebAuthn API.
+	"""
+	beginPasskeyLogin: PasskeyChallenge!
+	"""
+	Finish passkey login: verify the browser response and return an opaque session token.
+	"""
+	finishPasskeyLogin(challengeId: String!, credentialJson: String!): String
+	"""
+	Rename one of the authenticated user's passkeys.
+	"""
+	renamePasskey(id: String!, name: String!): PasskeyInfo!
+	"""
+	Delete one of the authenticated user's passkeys.
+	"""
+	deletePasskey(id: String!): Boolean!
 }
 
 enum NitcExportStatus {
@@ -151,6 +177,21 @@ type PageInfo {
 	When paginating forwards, the cursor to continue.
 	"""
 	endCursor: String
+}
+
+type PasskeyChallenge {
+	challengeId: String!
+	optionsJson: String!
+}
+
+"""
+Metadata for a stored passkey credential (never returns the private key material).
+"""
+type PasskeyInfo {
+	id: String!
+	name: String!
+	createdAt: Int!
+	lastUsedAt: Int
 }
 
 type Period {
@@ -337,6 +378,7 @@ type User {
 	accessTime: Int
 	emailSummaryLocationIds: [String!]!
 	locations: [Location!]!
+	passkeys: [PasskeyInfo!]!
 }
 
 """

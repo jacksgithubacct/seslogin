@@ -7,6 +7,7 @@ use async_graphql::Enum;
 use async_graphql::ID;
 use async_graphql::Json;
 use async_graphql::Object;
+use async_graphql::SimpleObject;
 use async_graphql::connection::{Connection, EmptyFields};
 use async_graphql::dataloader::DataLoader;
 use std::collections::HashMap;
@@ -142,6 +143,33 @@ impl<A: App + HasDb + Send + Sync + 'static> User<A> {
             .map(|s| Location::StaticID(s.clone()))
             .collect())
     }
+
+    #[graphql(guard = "AuthGuard::new(AuthRequirement::User)")]
+    async fn passkeys(&self, ctx: &Context<'_>) -> Result<Vec<PasskeyInfo>> {
+        let app = ctx.data_unchecked::<Arc<A>>();
+        let creds = app
+            .db()
+            .list_webauthn_credentials_by_user(&self.rec.id)
+            .await?;
+        Ok(creds
+            .into_iter()
+            .map(|c| PasskeyInfo {
+                id: c.id,
+                name: c.name,
+                created_at: c.created_at as i64,
+                last_used_at: c.last_used_at.map(|t| t as i64),
+            })
+            .collect())
+    }
+}
+
+/// Metadata for a stored passkey credential (never returns the private key material).
+#[derive(SimpleObject, Clone, Debug)]
+pub struct PasskeyInfo {
+    pub id: String,
+    pub name: String,
+    pub created_at: i64,
+    pub last_used_at: Option<i64>,
 }
 
 #[derive(Debug, PartialEq)]

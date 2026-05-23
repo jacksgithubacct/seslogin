@@ -51,7 +51,8 @@ async fn main() -> Result<(), Error> {
     let db_prefix = env::var("DB_PREFIX").expect("DB_PREFIX must be set for dynamodb backend");
     let db = dynamodb::Handler::new(&db_prefix, read_only).await;
     let app = Arc::new(app::new(db, key, 0, sqs));
-    let schema = graphql::build_schema(app.clone());
+    let webauthn = Arc::new(app::build_webauthn().expect("WebAuthn build failed"));
+    let schema = graphql::build_schema(app.clone(), webauthn);
     let handler = handler::Handler::new(app, schema);
     run(service_fn(|req| handler.handle_request(req))).await
 }
