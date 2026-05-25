@@ -7,7 +7,7 @@ export type Category = {
 
 export type Subcategory = {
   id: string;
-  legacy_id: string;
+  legacy_id?: string;
   name: string;
   icon: string;
 };
@@ -338,6 +338,16 @@ export const categories: Category[] = [
     name: "Assessor",
     icon: "3ede04e2f84a55565ea948cffa6261ec",
     subcategories: [
+      {
+        id: "KWU2BCxSXms0",
+        name: "Land Search",
+        icon: "74e1af1fd58ad402a19b615a912ae8b3",
+      },
+      {
+        id: "lO7YmMpXj3Xu",
+        name: "Field Core Skills",
+        icon: "3137f463223d0cdeb9bd3f036f0509d0",
+      },
       {
         id: "Iki2svFjFU48",
         legacy_id: "C820",
