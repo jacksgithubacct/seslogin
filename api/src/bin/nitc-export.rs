@@ -37,6 +37,10 @@ struct Cli {
     #[arg(long, default_value_t = false)]
     dry_run: bool,
 
+    /// Re-sync periods/events even if they are already synced.
+    #[arg(long, default_value_t = false)]
+    force: bool,
+
     #[arg(long)]
     ses_api_base_url: Option<String>,
 
@@ -86,6 +90,7 @@ fn build_config(cli: &Cli) -> Result<(NitcConfig, String)> {
     Ok((
         NitcConfig {
             dry_run: cli.dry_run,
+            force: cli.force,
             ses_api_base_url,
             ses_api_key,
             nitc_queue_url,

@@ -452,10 +452,10 @@ impl SesClient {
         //   safest to create with minimal data to reduce the risk of a 500 then update it later. Reducing the risk
         //   of a 500 on create is important because if the NITC event is inserted into the DB but a HTTP 500 is
         //   returned we'll end up with heaps of of duplicate NITC events.
-        if body.name.len() > 50 {
+        if body.name.chars().count() > 50 {
             anyhow::bail!(
                 "NITC event name too long ({} chars) for headquarters_id={}: {}",
-                body.name.len(),
+                body.name.chars().count(),
                 hq_id,
                 body.name
             );
@@ -501,10 +501,10 @@ impl SesClient {
             self.base_url.trim_end_matches('/'),
             hq_id
         );
-        if body.name.len() > 50 {
+        if body.name.chars().count() > 50 {
             anyhow::bail!(
                 "NITC event name too long ({} chars) for headquarters_id={}: {}",
-                body.name.len(),
+                body.name.chars().count(),
                 hq_id,
                 body.name
             );

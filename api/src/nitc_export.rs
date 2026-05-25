@@ -15,6 +15,8 @@ use crate::sqs_dispatch;
 #[derive(Debug, Clone)]
 pub struct NitcConfig {
     pub dry_run: bool,
+    /// Re-sync even when the period/event is already at the exported version.
+    pub force: bool,
     pub ses_api_base_url: String,
     pub ses_api_key: String,
     pub nitc_queue_url: String,
@@ -41,10 +43,21 @@ pub enum EventSyncOutcome {
     Skipped,
 }
 
+/// SES rejects event names longer than this many characters.
+const MAX_EVENT_NAME_LEN: usize = 50;
+
 fn make_event_name(category_name: Option<&str>) -> String {
     let name = category_name.unwrap_or("unknown");
     let compressed = name.replace(" - ", "-");
-    format!("SESLOGIN: {}", compressed)
+    let full = format!("SESLOGIN: {}", compressed);
+
+    if full.chars().count() <= MAX_EVENT_NAME_LEN {
+        return full;
+    }
+    // Keep the first 49 chars and append the ellipsis (counted as one char by SES).
+    let mut truncated: String = full.chars().take(MAX_EVENT_NAME_LEN - 1).collect();
+    truncated.push('…');
+    truncated
 }
 
 pub struct SqsClients {
@@ -162,7 +175,7 @@ pub async fn assign_period<D: db::Handler>(
         return Ok(PeriodAssignOutcome::Skipped);
     }
 
-    if period.nitc_exported_version >= Some(period.version) {
+    if !config.force && period.nitc_exported_version >= Some(period.version) {
         return Ok(PeriodAssignOutcome::AlreadySynced);
     }
 
@@ -338,7 +351,7 @@ pub async fn backfill_unsynced_periods<D: db::Handler>(
                     stats.periods_skipped_no_nitc_category += 1;
                     continue;
                 }
-                if period.nitc_exported_version >= Some(period.version) {
+                if !config.force && period.nitc_exported_version >= Some(period.version) {
                     stats.periods_already_synced += 1;
                     continue;
                 }
@@ -389,7 +402,7 @@ pub async fn sync_nitc_event<D: db::Handler>(
         return Ok(EventSyncOutcome::Stale);
     }
 
-    if event.synced_version.is_some_and(|v| v >= event.version) {
+    if !config.force && event.synced_version.is_some_and(|v| v >= event.version) {
         return Ok(EventSyncOutcome::AlreadySynced);
     }
 
@@ -731,4 +744,30 @@ pub async fn sync_nitc_event<D: db::Handler>(
         .await?;
 
     Ok(EventSyncOutcome::Synced(ses_nitc_id))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn short_name_unchanged() {
+        assert_eq!(make_event_name(Some("Boxing")), "SESLOGIN: Boxing");
+    }
+
+    #[test]
+    fn long_name_truncated_with_ellipsis() {
+        let long = "A".repeat(80);
+        let result = make_event_name(Some(&long));
+        assert_eq!(result.chars().count(), MAX_EVENT_NAME_LEN);
+        assert!(result.ends_with('…'));
+    }
+
+    #[test]
+    fn truncation_handles_multibyte_chars() {
+        let long = "é".repeat(80);
+        let result = make_event_name(Some(&long));
+        assert_eq!(result.chars().count(), MAX_EVENT_NAME_LEN);
+        assert!(result.ends_with('…'));
+    }
 }
