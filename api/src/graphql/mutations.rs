@@ -1446,22 +1446,26 @@ impl<A: App + HasDb + HasSqs + Send + Sync + 'static> MutationRoot<A> {
             )
             .map_err(|e| anyhow!("Passkey authentication failed: {}", e))?;
 
-        // Persist counter update if needed
+        // Always record last_used_at on a successful login. The counter bump is
+        // conditional (needs_update() only fires when the signature counter
+        // advanced), but most platform/synced passkeys keep the counter at 0 and
+        // never report needs_update(), so gating the whole write on it would
+        // leave last_used_at perpetually unset.
         if auth_result.needs_update() {
             passkey.update_credential(&auth_result);
-            let updated_json = serde_json::to_string(&passkey)
-                .map_err(|e| anyhow!("Failed to serialize updated passkey: {}", e))?;
-            let _ = self
-                .app
-                .db()
-                .update_webauthn_credential(
-                    &cred_id_str,
-                    db::WebauthnCredentialUpdate::TouchLastUsed {
-                        passkey_json: updated_json,
-                    },
-                )
-                .await;
         }
+        let updated_json = serde_json::to_string(&passkey)
+            .map_err(|e| anyhow!("Failed to serialize updated passkey: {}", e))?;
+        let _ = self
+            .app
+            .db()
+            .update_webauthn_credential(
+                &cred_id_str,
+                db::WebauthnCredentialUpdate::TouchLastUsed {
+                    passkey_json: updated_json,
+                },
+            )
+            .await;
 
         let _ = self.app.db().delete_webauthn_state(&challenge_id).await;
 
