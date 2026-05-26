@@ -68,6 +68,7 @@ function LoginRequired() {
   );
   const [accessDenied, setAccessDenied] = useState(false);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -123,6 +124,11 @@ function LoginRequired() {
   }
 
   async function onLogout() {
+    // Show the loading indicator (not the login page) for the whole logout so
+    // we don't briefly mount AdminLoginPage — which would kick off a wasteful
+    // passkey autofill / BeginPasskeyLogin before the Auth0 redirect navigates
+    // away.
+    setLoggingOut(true);
     const token = getAdminToken();
     if (token) {
       try {
@@ -151,7 +157,7 @@ function LoginRequired() {
     });
   }
 
-  if (authState === "loading") {
+  if (authState === "loading" || loggingOut) {
     return <LoadingIndicator />;
   }
 
