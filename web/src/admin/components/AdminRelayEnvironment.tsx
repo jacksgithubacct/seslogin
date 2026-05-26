@@ -1,5 +1,4 @@
 import { RelayEnvironmentProvider } from "react-relay";
-import { useAuth0 } from "@auth0/auth0-react";
 import { Suspense, useCallback, useMemo, type ReactNode } from "react";
 import { createAdminGraphQLEnvironment } from "../../lib/environments";
 import LoadingIndicator from "../../components/LoadingIndicator";
@@ -7,7 +6,8 @@ import { getAdminToken } from "../../lib/adminToken";
 
 /**
  * Relay environment provider for admin routes.
- * Uses the stored opaque admin token if present, falling back to Auth0.
+ * Uses the stored opaque seslogin token; if there's none, the request fails
+ * and the caller (onTokenError) sends the user back to the login page.
  */
 export default function AdminRelayEnvironment({
   onUnauthorized,
@@ -18,13 +18,11 @@ export default function AdminRelayEnvironment({
   onTokenError: () => void;
   children: ReactNode;
 }) {
-  const { getAccessTokenSilently } = useAuth0();
-
   const getToken = useCallback(async () => {
     const stored = getAdminToken();
-    if (stored) return stored;
-    return await getAccessTokenSilently();
-  }, [getAccessTokenSilently]);
+    if (!stored) throw new Error("No seslogin token");
+    return stored;
+  }, []);
 
   // Pass getToken directly so it's called lazily per-request.
   // This keeps the Environment object stable across renders, preserving the

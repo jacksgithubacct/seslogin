@@ -12,15 +12,7 @@ import {
 } from "../../lib/passkey";
 
 interface AdminLoginPageProps {
-  /**
-   * Triggers the Auth0 popup sign-in. Currently not rendered (the Auth0 button
-   * was removed) but kept wired up so it can be re-enabled easily.
-   */
-  onLogin: () => void | Promise<void>;
-  onLogout?: () => void | Promise<void>;
-  isLoading?: boolean;
   errorMessage?: string | null;
-  showUnauthorizedMessage?: boolean;
   onNewTokenReceived: (token: string) => void;
 }
 
@@ -49,11 +41,7 @@ async function callMutation(
 }
 
 export default function AdminLoginPage({
-  // onLogin (Auth0) intentionally not consumed — the button was removed.
-  onLogout,
-  isLoading = false,
   errorMessage,
-  showUnauthorizedMessage = false,
   onNewTokenReceived,
 }: AdminLoginPageProps) {
   const [step, setStep] = useState<EmailCodeStep>("idle");
@@ -82,10 +70,9 @@ export default function AdminLoginPage({
   // Transparent passkey login: when the page loads, prime a discoverable
   // challenge and attach it to the email field via browser autofill. If the
   // user picks a saved passkey we log them straight in; otherwise this is a
-  // no-op and the email-code / Auth0 flows remain available.
+  // no-op and the email-code flow remains available.
   useEffect(() => {
     mountedRef.current = true;
-    if (showUnauthorizedMessage) return;
     if (autofillStartedRef.current) return;
     autofillStartedRef.current = true;
     (async () => {
@@ -107,7 +94,7 @@ export default function AdminLoginPage({
     return () => {
       mountedRef.current = false;
     };
-  }, [showUnauthorizedMessage]);
+  }, []);
 
   // Manual passkey sign-in (modal prompt) — fallback for browsers where the
   // autofill/conditional-UI path doesn't surface saved passkeys.
@@ -186,35 +173,19 @@ export default function AdminLoginPage({
       <div className="action-panel__panel">
         <h1>Please sign in to continue</h1>
 
-        {showUnauthorizedMessage ? (
-          <div className="action-panel__message action-panel__message--warning">
-            An unauthorized error was encountered. It is possible that the email
-            address you used to sign in is not registered for admin access. Try
-            refreshing the page if you believe you used the correct email
-            address or click the button below to try logging in with a different
-            email address.
-          </div>
-        ) : null}
-
         {errorMessage ? (
           <div className="action-panel__message action-panel__message--error">
             {errorMessage}
           </div>
         ) : null}
 
-        {/*
-          Auth0 sign-in button removed (handler `onLogin` retained for now).
-          The Auth0 flow still works and can be re-enabled by rendering a
-          button wired to onLogin.
-        */}
-
         {/* Manual passkey login (fallback when autofill doesn't surface it) */}
-        {!showUnauthorizedMessage && passkeySupported && (
+        {passkeySupported && (
           <button
             type="button"
             className="action-button action-panel__button"
             onClick={handlePasskeyLogin}
-            disabled={passkeySigningIn || isLoading}
+            disabled={passkeySigningIn}
           >
             {passkeySigningIn
               ? "Waiting for passkey..."
@@ -228,19 +199,8 @@ export default function AdminLoginPage({
           </div>
         )}
 
-        {showUnauthorizedMessage && onLogout ? (
-          <button
-            type="button"
-            className="action-button action-panel__button action-panel__button--secondary"
-            onClick={onLogout}
-            disabled={isLoading}
-          >
-            Log out of current account
-          </button>
-        ) : null}
-
         {/* Divider — only when there's a button above it (passkey) */}
-        {!showUnauthorizedMessage && passkeySupported && (
+        {passkeySupported && (
           <div
             style={{ margin: "1.5rem 0", textAlign: "center", color: "#888" }}
           >
@@ -249,7 +209,7 @@ export default function AdminLoginPage({
         )}
 
         {/* New email-code login */}
-        {!showUnauthorizedMessage && step === "idle" && (
+        {step === "idle" && (
           <form onSubmit={handleSendCode}>
             <p className="action-panel__intro">
               Enter your registered email address to receive a login code.
@@ -299,11 +259,9 @@ export default function AdminLoginPage({
           </form>
         )}
 
-        {!showUnauthorizedMessage && step === "sending" && (
-          <p>Sending code to {email}…</p>
-        )}
+        {step === "sending" && <p>Sending code to {email}…</p>}
 
-        {!showUnauthorizedMessage && step === "awaiting_code" && (
+        {step === "awaiting_code" && (
           <form onSubmit={handleVerifyCode}>
             <p className="action-panel__intro">
               A 6-digit code was sent to <strong>{email}</strong>. Enter it
@@ -354,7 +312,7 @@ export default function AdminLoginPage({
           </form>
         )}
 
-        {!showUnauthorizedMessage && step === "verifying" && <p>Verifying…</p>}
+        {step === "verifying" && <p>Verifying…</p>}
       </div>
     </section>
   );

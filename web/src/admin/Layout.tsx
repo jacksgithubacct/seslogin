@@ -1,10 +1,8 @@
-import { useAuth0 } from "@auth0/auth0-react";
-import { Suspense, startTransition, useEffect, useState } from "react";
+import { Suspense, startTransition, useState } from "react";
 import { ErrorBoundary } from "react-error-boundary";
 import AdminContent from "./components/AdminContent";
 import LoadingIndicator from "../components/LoadingIndicator";
 import PageErrorFallback from "../components/PageErrorFallback";
-import { Auth0Provider } from "@auth0/auth0-react";
 import SettingsProvider from "./components/SettingsProvider";
 import "./style.css";
 import { UserInfoProvider } from "./components/UserInfoProvider";
@@ -28,126 +26,65 @@ export default function Layout() {
   return (
     <div id="admin">
       <ErrorBoundary FallbackComponent={PageErrorFallback}>
-        <AdminAuthProvider />
+        <LoginRequired />
       </ErrorBoundary>
     </div>
   );
 }
 
-function AdminAuthProvider() {
-  return (
-    <Auth0Provider
-      domain="auth.seslogin.com"
-      clientId="5dECCcUEKvNNVpp0cyss4O4nI4RkrJaw"
-      authorizationParams={{
-        redirect_uri:
-          typeof window !== "undefined" ? window.location.origin : "",
-        audience: "https://api.seslogin.com",
-      }}
-      cacheLocation="localstorage"
-    >
-      <LoginRequired />
-    </Auth0Provider>
-  );
-}
-
-type AuthState = "loading" | "authenticated" | "unauthenticated";
+// Admin auth relies solely on our own opaque seslogin token (issued by the
+// email-code and passkey login flows) stored in localStorage. The view is a
+// single state machine so invalid flag combinations can't occur.
+type Status =
+  | { kind: "authenticated" }
+  | { kind: "loggingOut" }
+  | { kind: "unauthenticated"; error: string | null };
 
 function LoginRequired() {
-  const { isAuthenticated, loginWithPopup, logout, isLoading } = useAuth0();
-  console.log("Auth0 loading:", isLoading, "authenticated:", isAuthenticated);
-
-  const hasStoredToken = getAdminToken() !== null;
-
-  const [authState, setAuthState] = useState<AuthState>(
-    isLoading
-      ? "loading"
-      : isAuthenticated || hasStoredToken
-        ? "authenticated"
-        : "unauthenticated",
+  const [status, setStatus] = useState<Status>(() =>
+    getAdminToken()
+      ? { kind: "authenticated" }
+      : { kind: "unauthenticated", error: null },
   );
-  const [accessDenied, setAccessDenied] = useState(false);
-  const [isLoggingIn, setIsLoggingIn] = useState(false);
-  const [loggingOut, setLoggingOut] = useState(false);
-  const [loginError, setLoginError] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (authState === "loading" && !isLoading) {
-      startTransition(() => {
-        if (isAuthenticated || getAdminToken() !== null) {
-          setAuthState("authenticated");
-        } else {
-          setAuthState("unauthenticated");
-        }
-      });
-    }
-  }, [isLoading, isAuthenticated, authState]);
-
+  // The server rejected our token (expired or revoked). Discard it and send
+  // the user back to the login window with a clear message. This only fires on
+  // a definitive 401 — transient 5xx / network failures never reach here, so we
+  // never drop a still-valid token over a blip.
   function onUnauthorized() {
-    // Distinguish which credential the rejected request used. AdminRelay-
-    // Environment prefers the stored seslogin token and only falls back to
-    // Auth0 when there's none, so a present stored token means our own token
-    // was rejected. This only fires on a definitive 401 — transient 5xx /
-    // network failures never reach here, so we never drop a valid token over a
-    // blip.
-    if (getAdminToken() !== null) {
-      // Our seslogin token expired or was revoked: discard it and return the
-      // user to the login window with a clear message.
-      clearAdminToken();
-      setAccessDenied(false);
-      setLoginError(
+    clearAdminToken();
+    setStatus({
+      kind: "unauthenticated",
+      error:
         "Your session has expired or is no longer valid, please login again.",
-      );
-      setAuthState("unauthenticated");
-    } else {
-      // Auth0-authenticated request was rejected (e.g. the email isn't a
-      // registered admin). Preserve the existing Auth0 behavior unchanged.
-      clearAdminToken();
-      setAuthState("unauthenticated");
-      setAccessDenied(true);
-    }
+    });
   }
 
+  // Relay couldn't obtain a token to send (getToken threw because there's no
+  // stored token). This shouldn't normally happen: the authenticated tree only
+  // mounts when a token exists, so reaching here means the token vanished
+  // mid-session — an unexpected state rather than ordinary expiry. Hence the
+  // more generic wording vs. onUnauthorized's "session expired" message.
   function onTokenError() {
-    setAccessDenied(false);
-    setLoginError(
-      "Failed to get an auth token - your session may have expired. Please try logging in again.",
-    );
-    setAuthState("unauthenticated");
-  }
-
-  async function onLogin() {
-    setAccessDenied(false);
-    setLoginError(null);
-    setIsLoggingIn(true);
-
-    try {
-      await loginWithPopup();
-    } catch {
-      setLoginError(
-        "Login did not complete. Try again to receive a fresh email code.",
-      );
-    } finally {
-      setIsLoggingIn(false);
-      setAuthState("authenticated");
-    }
+    setStatus({
+      kind: "unauthenticated",
+      error:
+        "An unexpected error occurred while fetching an auth token. Please log in again.",
+    });
   }
 
   function onNewTokenReceived(token: string) {
     setAdminToken(token);
-    setAccessDenied(false);
-    setLoginError(null);
     startTransition(() => {
-      setAuthState("authenticated");
+      setStatus({ kind: "authenticated" });
     });
   }
 
   async function onLogout() {
-    // Show the loading indicator (not the login page) for the whole logout so
-    // we don't briefly mount AdminLoginPage — which would kick off a wasteful
-    // passkey autofill / BeginPasskeyLogin before the Auth0 redirect navigates
-    // away.
-    setLoggingOut(true);
+    // Switch to the loading view immediately so we don't briefly mount
+    // AdminLoginPage (which would kick off a wasteful passkey autofill /
+    // BeginPasskeyLogin) while the logout request is in flight.
+    setStatus({ kind: "loggingOut" });
     const token = getAdminToken();
     if (token) {
       try {
@@ -167,27 +104,17 @@ function LoginRequired() {
       clearAdminToken();
     }
     clearPasskeyLoginSession();
-    setAuthState("unauthenticated");
-    setAccessDenied(false);
-    logout({
-      logoutParams: {
-        returnTo: `${window.location.origin}/`,
-      },
-    });
+    window.location.href = "/";
   }
 
-  if (authState === "loading" || loggingOut) {
+  if (status.kind === "loggingOut") {
     return <LoadingIndicator />;
   }
 
-  if (authState !== "authenticated") {
+  if (status.kind === "unauthenticated") {
     return (
       <AdminLoginPage
-        onLogin={onLogin}
-        onLogout={onLogout}
-        isLoading={isLoggingIn}
-        errorMessage={loginError}
-        showUnauthorizedMessage={accessDenied}
+        errorMessage={status.error}
         onNewTokenReceived={onNewTokenReceived}
       />
     );

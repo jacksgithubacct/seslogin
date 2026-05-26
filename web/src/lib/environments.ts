@@ -11,8 +11,8 @@ type GetTokenFn = () => Promise<string>;
 
 /**
  * Creates a Relay environment for admin routes.
- * getToken is called per-request; it should prefer the stored opaque token
- * and fall back to Auth0's getAccessTokenSilently.
+ * getToken is called per-request and returns the stored opaque seslogin token
+ * (it rejects if there is none).
  */
 export function createAdminGraphQLEnvironment(
   getToken: GetTokenFn,
