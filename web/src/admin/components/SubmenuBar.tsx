@@ -43,6 +43,9 @@ export default function SubmenuBar({ isSuper }: SubmenuBarProps) {
           <NavLink to="/admin/activity/breakdown" end>
             Breakdown
           </NavLink>
+          <NavLink to="/admin/activity/last-seen" end>
+            Last Seen
+          </NavLink>
         </div>
       )}
 

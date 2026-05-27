@@ -32,6 +32,7 @@ import ActivityListMember from "./admin/pages/ActivityListMember";
 import ActivityCurrent from "./admin/pages/ActivityCurrent";
 import ActivityTotals from "./admin/pages/ActivityTotals";
 import ActivityBreakdown from "./admin/pages/ActivityBreakdown";
+import ActivityLastSeen from "./admin/pages/ActivityLastSeen";
 import Reports from "./admin/pages/Reports";
 import SettingsPasskeys from "./admin/pages/SettingsPasskeys";
 import SettingsDailyEmail from "./admin/pages/SettingsDailyEmail";
@@ -89,6 +90,7 @@ export default function Router() {
             <Route path="current" element={<ActivityCurrent />} />
             <Route path="totals" element={<ActivityTotals />} />
             <Route path="breakdown" element={<ActivityBreakdown />} />
+            <Route path="last-seen" element={<ActivityLastSeen />} />
             <Route path=":periodId" element={<ActivityEdit />} />
           </Route>
           <Route path="reports">

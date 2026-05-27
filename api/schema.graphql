@@ -261,6 +261,10 @@ type Person {
 	sesApiPersonId: String
 	deleted: Boolean!
 	periods(after: String, before: String, first: Int, last: Int): PeriodConnection!
+	"""
+	The person's most recent period (by start time), or null if they have none.
+	"""
+	lastPeriod: Period
 }
 
 type QueryRoot {

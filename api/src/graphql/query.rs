@@ -327,6 +327,31 @@ impl<A: App + HasDb + Send + Sync> Person<A> {
             |p| (encode_period_cursor(p), Period::new(p.clone())),
         ))
     }
+
+    /// The person's most recent period (by start time), or null if they have none.
+    async fn last_period(&self, ctx: &Context<'_>) -> Result<Option<Period<A>>> {
+        require_location_access(ctx, &self.rec.location_id)?;
+        let app = ctx.data_unchecked::<Arc<A>>();
+        let mut items = app
+            .db()
+            .list_periods_for_person(
+                &self.rec.id,
+                None,
+                None,
+                db::ListPeriodsPage {
+                    after: None,
+                    before: None,
+                    limit: 1,
+                    descending: true,
+                },
+            )
+            .await
+            .map_err(|e| {
+                warn!("db error: {:?}", e);
+                e
+            })?;
+        Ok(items.drain(..).next().map(Period::new))
+    }
 }
 
 #[derive(Debug, PartialEq)]
