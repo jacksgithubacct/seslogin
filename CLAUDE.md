@@ -97,9 +97,10 @@ The policy ARN is in `.env.secret` as `SESLOGIN_TERRAFORM_POLICY_ARN`. The scrip
 
 **Database abstraction**: `api/src/db.rs` defines traits; `api/src/dynamodb.rs` is the DynamoDB implementation. A `mockdb` implementation exists for tests.
 
-**Auth**: `api/src/auth.rs` — Two methods:
-1. Session code (single-use numeric codes for kiosk devices → 14-day JWT)
-2. Auth0 OAuth2 (checked first; falls back to local JWT)
+**Auth**: `api/src/auth.rs` — token verification dispatches on prefix:
+1. API tokens (`slgn_` prefix) — opaque hashed secrets for programmatic access
+2. User tokens (`slu_` prefix) — opaque hashed secrets issued via email-code auth
+3. JWT (no prefix) — session JWTs (single-use numeric kiosk codes → 14-day JWT) and user JWTs
 
 Authorization uses an `AuthRequirement` guard enum per field: `Session`, `UserOrSession`, `User`, `SuperUser`.
 

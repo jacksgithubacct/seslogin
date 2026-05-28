@@ -5,7 +5,6 @@ use tracing::warn;
 use crate::app::App;
 use crate::app::HasDb;
 use crate::app::HasSqs;
-use crate::auth0;
 use crate::db;
 use crate::db::Handler;
 use crate::jwt;
@@ -36,7 +35,7 @@ pub enum AuthInfo {
         id: String,
         is_super: bool,
         location_grants: Vec<String>,
-        /// Set only when authenticated via an opaque user token; None for Auth0/JWT.
+        /// Set only when authenticated via an opaque user token; None for JWT.
         token_id: Option<String>,
     },
     Session {
@@ -187,7 +186,7 @@ async fn fetch_update_session_auth_info<A: App + HasDb + HasSqs>(
     })
 }
 
-fn hash_api_token(secret: &str) -> String {
+fn hash_token(secret: &str) -> String {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     hasher.update(secret.as_bytes());
@@ -198,7 +197,7 @@ async fn verify_token_with_api_token<A: App + HasDb>(
     app: &A,
     token: &str,
 ) -> Result<AuthInfo, AuthError> {
-    let token_hash = hash_api_token(token);
+    let token_hash = hash_token(token);
     let api_token = app
         .db()
         .get_api_token_by_hash(&token_hash)
@@ -238,31 +237,6 @@ async fn verify_token_with_api_token<A: App + HasDb>(
     })
 }
 
-async fn verify_token_with_auth0<A: App + HasDb>(
-    app: &A,
-    token: &str,
-) -> Result<AuthInfo, AuthError> {
-    let auth0_user = auth0::verify_auth0_token(token)
-        .await
-        .map_err(|e| match e {
-            auth0::VerifyError::Transient(msg) => AuthError::Transient(msg),
-            auth0::VerifyError::Permanent(msg) => AuthError::Permanent(msg),
-        })?;
-
-    let email = auth0_user
-        .email
-        .ok_or_else(|| AuthError::Permanent("Auth0 token missing email claim".into()))?;
-
-    let user_id = app
-        .db()
-        .get_user_id_by_email(&email)
-        .await
-        .map_err(|e| classify_db_err("fetch user ID by email from db", e))?
-        .ok_or_else(|| AuthError::Permanent(format!("User not found for email: {}", email)))?;
-
-    fetch_update_user_auth_info(app, user_id).await
-}
-
 async fn verify_token_with_jwt<A: App + HasDb + HasSqs>(
     app: &A,
     token: &str,
@@ -280,18 +254,11 @@ async fn verify_token_with_jwt<A: App + HasDb + HasSqs>(
     }
 }
 
-fn hash_user_token(secret: &str) -> String {
-    use sha2::{Digest, Sha256};
-    let mut hasher = Sha256::new();
-    hasher.update(secret.as_bytes());
-    hex::encode(hasher.finalize())
-}
-
 async fn verify_token_with_user_token<A: App + HasDb>(
     app: &A,
     token: &str,
 ) -> Result<AuthInfo, AuthError> {
-    let token_hash = hash_user_token(token);
+    let token_hash = hash_token(token);
     let user_token = app
         .db()
         .get_user_token_by_hash(&token_hash)
@@ -342,13 +309,8 @@ async fn verify_token_with_user_token<A: App + HasDb>(
 }
 
 pub async fn issue_user_token<A: App + HasDb>(app: &A, user_id: &str) -> Result<String> {
-    use sha2::{Digest, Sha256};
     let secret = format!("{}{}", USER_TOKEN_PREFIX, crate::nonce::generate_nonce(32));
-    let hash = {
-        let mut hasher = Sha256::new();
-        hasher.update(secret.as_bytes());
-        hex::encode(hasher.finalize())
-    };
+    let hash = hash_token(&secret);
     let expires_at = crate::expire::ExpirePolicy::UserTokenDefault.from_now();
     app.db()
         .create_user_token(&hash, user_id, expires_at)
@@ -369,28 +331,12 @@ pub async fn verify_token<A: App + HasDb + HasSqs>(
         return verify_token_with_user_token(app, token).await;
     }
 
-    let auth0_err = match verify_token_with_auth0(app, token).await {
-        Ok(info) => return Ok(info),
-        Err(e) => e,
-    };
-
-    let jwt_err = match verify_token_with_jwt(app, token, client_version).await {
-        Ok(info) => return Ok(info),
-        Err(e) => e,
-    };
-
-    // If either path hit a transient error we can't conclusively reject the token.
-    let msg = format!("Auth0: {}; JWT: {}", auth0_err, jwt_err);
-    if matches!(auth0_err, AuthError::Transient(_)) || matches!(jwt_err, AuthError::Transient(_)) {
-        Err(AuthError::Transient(msg))
-    } else {
-        Err(AuthError::Permanent(msg))
-    }
+    verify_token_with_jwt(app, token, client_version).await
 }
 
 /// Generate a new opaque api token secret. Returns (secret, sha256_hex_hash).
 pub fn generate_api_token_secret() -> (String, String) {
     let secret = format!("{}{}", API_TOKEN_PREFIX, crate::nonce::generate_nonce(32));
-    let hash = hash_api_token(&secret);
+    let hash = hash_token(&secret);
     (secret, hash)
 }

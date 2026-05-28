@@ -1,7 +1,6 @@
 pub mod activity_summary;
 pub mod app;
 pub mod auth;
-pub mod auth0;
 pub mod db;
 pub mod dynamodb;
 pub mod emf;

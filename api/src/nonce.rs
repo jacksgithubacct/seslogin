@@ -14,18 +14,6 @@ pub fn generate_code(len: u32) -> String {
     format!("{:0len$}", num, len = len as usize) // pad with leading zeros to ensure length is len
 }
 
-pub fn generate_alphanumeric_code(len: u32) -> String {
-    assert!(len > 0);
-    const CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-    let mut rng = rng();
-    (0..len)
-        .map(|_| {
-            let idx = rng.random_range(0..CHARSET.len());
-            CHARSET[idx] as char
-        })
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

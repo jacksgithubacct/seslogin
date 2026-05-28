@@ -23,7 +23,7 @@ All IDs are exposed to the API layer as opaque UUID strings. Conversion happens 
 
 | GSI | Hash key | Sort key | Projection | Purpose |
 |-----|----------|----------|------------|---------|
-| `email-index` | `email` | — | KEYS_ONLY | Auth0 login: resolve email claim → user ID without reading the full item |
+| `email-index` | `email` | — | KEYS_ONLY | Email-code login: resolve email → user ID without reading the full item |
 
 `username-index` is intentionally absent — username login is not supported in v2.
 

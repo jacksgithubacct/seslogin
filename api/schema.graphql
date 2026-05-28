@@ -89,7 +89,7 @@ type MutationRoot {
 	"""
 	verifyAuthCode(email: String!, code: String!): String
 	"""
-	Revoke the current user's opaque session token (no-op for Auth0/JWT sessions).
+	Revoke the current user's opaque session token (no-op for JWT sessions).
 	"""
 	logout: Boolean!
 	createUser(email: String!, isSuper: Boolean!, locationGrants: [String!]!): User!

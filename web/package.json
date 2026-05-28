@@ -26,8 +26,7 @@
     "react-error-boundary": "^6.0.0",
     "react-relay": "^20.1.1",
     "react-router": "^7.8.2",
-    "relay-runtime": "^20.1.1",
-    "tailwindcss": "^4.1.13"
+    "relay-runtime": "^20.1.1"
   },
   "devDependencies": {
     "@babel/core": "^7.29.0",

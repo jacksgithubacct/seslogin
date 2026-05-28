@@ -22,7 +22,7 @@ In scope:
 - The Terraform configuration under `infra/` (note: `infra/` is published as reference only; live deployments are out of scope for direct testing)
 
 Out of scope:
-- Vulnerabilities in third-party services we integrate with (Auth0, AWS managed services, the SES headquarters API) — please report those to the relevant vendor.
+- Vulnerabilities in third-party services we integrate with (AWS managed services, the SES headquarters API) — please report those to the relevant vendor.
 - Issues that require an already-compromised user account or admin session to exploit.
 - Denial-of-service via volumetric traffic against shared infrastructure.
 
