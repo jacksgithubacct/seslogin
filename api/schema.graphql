@@ -381,6 +381,7 @@ type User {
 	deleted: Boolean!
 	accessTime: Int
 	emailSummaryLocationIds: [String!]!
+	locationGrantIds: [ID!]!
 	locations: [Location!]!
 	passkeys: [PasskeyInfo!]!
 }

@@ -17,9 +17,7 @@ export default function UserEdit() {
           email
           isSuper
           isDev
-          locations {
-            id
-          }
+          locationGrantIds
         }
         locations {
           id
@@ -52,9 +50,7 @@ export default function UserEdit() {
           email
           isSuper
           isDev
-          locations {
-            id
-          }
+          locationGrantIds
         }
       }
     `,
@@ -96,7 +92,7 @@ export default function UserEdit() {
   const [isSuper, setIsSuper] = useState(user.isSuper);
   const [isDev, setIsDev] = useState(user.isDev);
   const [selectedLocations, setSelectedLocations] = useState(
-    () => new Set(user.locations.map((l) => l.id)),
+    () => new Set(user.locationGrantIds),
   );
 
   return (

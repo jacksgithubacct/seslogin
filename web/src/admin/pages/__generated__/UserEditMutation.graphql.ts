@@ -1,5 +1,5 @@
 /**
- * @generated SignedSource<<af91f258f186af7e045fe57873c0f19e>>
+ * @generated SignedSource<<b58a76d7d144d6e0bd279dd124a9cfe4>>
  * @lightSyntaxTransform
  * @nogrep
  */
@@ -23,9 +23,7 @@ export type UserEditMutation$data = {
     readonly id: string;
     readonly isDev: boolean;
     readonly isSuper: boolean;
-    readonly locations: ReadonlyArray<{
-      readonly id: string;
-    }>;
+    readonly locationGrantIds: ReadonlyArray<string>;
   };
 };
 export type UserEditMutation = {
@@ -64,14 +62,7 @@ v5 = {
   "kind": "LocalArgument",
   "name": "locationGrants"
 },
-v6 = {
-  "alias": null,
-  "args": null,
-  "kind": "ScalarField",
-  "name": "id",
-  "storageKey": null
-},
-v7 = [
+v6 = [
   {
     "alias": null,
     "args": [
@@ -111,7 +102,13 @@ v7 = [
     "name": "updateUser",
     "plural": false,
     "selections": [
-      (v6/*: any*/),
+      {
+        "alias": null,
+        "args": null,
+        "kind": "ScalarField",
+        "name": "id",
+        "storageKey": null
+      },
       {
         "alias": null,
         "args": null,
@@ -136,13 +133,8 @@ v7 = [
       {
         "alias": null,
         "args": null,
-        "concreteType": "Location",
-        "kind": "LinkedField",
-        "name": "locations",
-        "plural": true,
-        "selections": [
-          (v6/*: any*/)
-        ],
+        "kind": "ScalarField",
+        "name": "locationGrantIds",
         "storageKey": null
       }
     ],
@@ -162,7 +154,7 @@ return {
     "kind": "Fragment",
     "metadata": null,
     "name": "UserEditMutation",
-    "selections": (v7/*: any*/),
+    "selections": (v6/*: any*/),
     "type": "MutationRoot",
     "abstractKey": null
   },
@@ -178,19 +170,19 @@ return {
     ],
     "kind": "Operation",
     "name": "UserEditMutation",
-    "selections": (v7/*: any*/)
+    "selections": (v6/*: any*/)
   },
   "params": {
-    "cacheID": "068503040714316aca90ef06ebd1ece8",
+    "cacheID": "90fef54871b0d9dcb46725db99837a2c",
     "id": null,
     "metadata": {},
     "name": "UserEditMutation",
     "operationKind": "mutation",
-    "text": "mutation UserEditMutation(\n  $id: ID!\n  $email: String!\n  $isSuper: Boolean!\n  $isDev: Boolean!\n  $locationGrants: [String!]!\n  $deleted: Boolean!\n) {\n  updateUser(id: $id, email: $email, isSuper: $isSuper, isDev: $isDev, locationGrants: $locationGrants, deleted: $deleted) {\n    id\n    email\n    isSuper\n    isDev\n    locations {\n      id\n    }\n  }\n}\n"
+    "text": "mutation UserEditMutation(\n  $id: ID!\n  $email: String!\n  $isSuper: Boolean!\n  $isDev: Boolean!\n  $locationGrants: [String!]!\n  $deleted: Boolean!\n) {\n  updateUser(id: $id, email: $email, isSuper: $isSuper, isDev: $isDev, locationGrants: $locationGrants, deleted: $deleted) {\n    id\n    email\n    isSuper\n    isDev\n    locationGrantIds\n  }\n}\n"
   }
 };
 })();
 
-(node as any).hash = "9bb81188b8b6028cbdbc8f9429555704";
+(node as any).hash = "0787bc375c0dd917e0d9b7e8dc5bf1ce";
 
 export default node;

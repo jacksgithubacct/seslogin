@@ -1,5 +1,5 @@
 /**
- * @generated SignedSource<<30b28df7afc05e1a42faa72b2866eca9>>
+ * @generated SignedSource<<8dec900aa4d31e6fe85bd8ba21cd15a9>>
  * @lightSyntaxTransform
  * @nogrep
  */
@@ -22,9 +22,7 @@ export type UserEditQuery$data = {
     readonly id: string;
     readonly isDev: boolean;
     readonly isSuper: boolean;
-    readonly locations: ReadonlyArray<{
-      readonly id: string;
-    }>;
+    readonly locationGrantIds: ReadonlyArray<string>;
   };
 };
 export type UserEditQuery = {
@@ -87,13 +85,8 @@ v2 = [
       {
         "alias": null,
         "args": null,
-        "concreteType": "Location",
-        "kind": "LinkedField",
-        "name": "locations",
-        "plural": true,
-        "selections": [
-          (v1/*: any*/)
-        ],
+        "kind": "ScalarField",
+        "name": "locationGrantIds",
         "storageKey": null
       }
     ],
@@ -137,16 +130,16 @@ return {
     "selections": (v2/*: any*/)
   },
   "params": {
-    "cacheID": "f69c6c518ec6f5e89a5085ef75cea855",
+    "cacheID": "56c66f88bf008a31a023c9eb5b66e289",
     "id": null,
     "metadata": {},
     "name": "UserEditQuery",
     "operationKind": "query",
-    "text": "query UserEditQuery(\n  $id: ID!\n) {\n  user(id: $id) {\n    id\n    email\n    isSuper\n    isDev\n    locations {\n      id\n    }\n  }\n  locations {\n    id\n    name\n  }\n}\n"
+    "text": "query UserEditQuery(\n  $id: ID!\n) {\n  user(id: $id) {\n    id\n    email\n    isSuper\n    isDev\n    locationGrantIds\n  }\n  locations {\n    id\n    name\n  }\n}\n"
   }
 };
 })();
 
-(node as any).hash = "8e5d11867ef6708723630cc3db678ee6";
+(node as any).hash = "08a7f6e79ad0bd32c34e5e23efc862f6";
 
 export default node;
