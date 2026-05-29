@@ -1,5 +1,5 @@
 /**
- * @generated SignedSource<<e1ec001a05487636d35aa124bafcbb48>>
+ * @generated SignedSource<<73d9ec063f5a6b196421cf1ae581c655>>
  * @lightSyntaxTransform
  * @nogrep
  */
@@ -12,7 +12,7 @@ import { ConcreteRequest } from 'relay-runtime';
 export type UserInfoProviderQuery$variables = Record<PropertyKey, never>;
 export type UserInfoProviderQuery$data = {
   readonly user: {
-    readonly email: string | null | undefined;
+    readonly email: string;
     readonly id: string;
     readonly isDev: boolean;
     readonly isSuper: boolean;

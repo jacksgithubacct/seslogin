@@ -1,5 +1,5 @@
 /**
- * @generated SignedSource<<393484bbf21972b290e62b3667fa1291>>
+ * @generated SignedSource<<3ac95a304573e5e7539afdbf45afe32a>>
  * @lightSyntaxTransform
  * @nogrep
  */
@@ -12,7 +12,7 @@ import { ReaderFragment } from 'relay-runtime';
 import { FragmentRefs } from "relay-runtime";
 export type UserList_user$data = {
   readonly accessTime: number | null | undefined;
-  readonly email: string | null | undefined;
+  readonly email: string;
   readonly enabled: boolean;
   readonly id: string;
   readonly isDev: boolean;

@@ -1229,7 +1229,7 @@ impl<A: App + HasDb + HasSqs + Send + Sync + 'static> MutationRoot<A> {
             .into_iter()
             .next()
             .flatten()
-            .and_then(|u| u.email)
+            .map(|u| u.email)
             .unwrap_or_else(|| user_id.clone());
 
         let existing_cred_ids: Vec<CredentialID> = existing

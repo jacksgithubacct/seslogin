@@ -1,5 +1,5 @@
 /**
- * @generated SignedSource<<d15d959b5a164ba122b17beadf389c5e>>
+ * @generated SignedSource<<624343a74783a67a0c067f06de16f0e3>>
  * @lightSyntaxTransform
  * @nogrep
  */
@@ -18,7 +18,7 @@ export type UserEditQuery$data = {
     readonly name: string;
   }>;
   readonly user: {
-    readonly email: string | null | undefined;
+    readonly email: string;
     readonly enabled: boolean;
     readonly id: string;
     readonly isDev: boolean;

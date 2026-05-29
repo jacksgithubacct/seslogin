@@ -57,8 +57,7 @@ impl<A: App + HasDb + Send + Sync + 'static> User<A> {
     async fn id(&self) -> ID {
         async_graphql::ID(self.rec.id.clone())
     }
-    /// this can be null
-    async fn email(&self) -> &Option<String> {
+    async fn email(&self) -> &str {
         &self.rec.email
     }
     /// defaults to false if missing

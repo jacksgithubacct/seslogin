@@ -202,7 +202,9 @@ impl TryInto<User> for Item {
     fn try_into(self) -> Result<User, Self::Error> {
         Ok(User {
             id: self.id(),
-            email: self.string_field("email")?,
+            email: self
+                .string_field("email")?
+                .ok_or_else(|| anyhow!("User missing email"))?,
             is_super: self.bool_field("super")?.unwrap_or(false),
             is_dev: self.bool_field("dev")?.unwrap_or(false),
             location_grants: self.string_set_field("location_grants")?,
@@ -750,7 +752,7 @@ impl db::Handler for Handler {
 
         Ok(User {
             id,
-            email: Some(email.to_string()),
+            email: email.to_string(),
             is_super,
             is_dev: false,
             location_grants,

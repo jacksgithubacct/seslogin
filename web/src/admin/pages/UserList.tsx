@@ -67,7 +67,7 @@ function Row(props: { user: UserList_user$key; idx: number; isDev: boolean }) {
         commitMutation({
           variables: {
             id: user.id,
-            email: user.email || "",
+            email: user.email,
             isSuper: user.isSuper,
             isDev: user.isDev,
             locationGrants: [...user.locationGrantIds],

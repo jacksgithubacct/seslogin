@@ -1,5 +1,5 @@
 /**
- * @generated SignedSource<<693cdf0f34368f2d8d84b44deab9532d>>
+ * @generated SignedSource<<e9b34eef1ad661aeefc3ba322beb11cc>>
  * @lightSyntaxTransform
  * @nogrep
  */
@@ -19,7 +19,7 @@ export type UserEditMutation$variables = {
 };
 export type UserEditMutation$data = {
   readonly updateUser: {
-    readonly email: string | null | undefined;
+    readonly email: string;
     readonly id: string;
     readonly isDev: boolean;
     readonly isSuper: boolean;

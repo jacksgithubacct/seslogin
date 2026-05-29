@@ -366,10 +366,7 @@ type Session {
 
 type User {
 	id: ID!
-	"""
-	this can be null
-	"""
-	email: String
+	email: String!
 	"""
 	defaults to false if missing
 	"""

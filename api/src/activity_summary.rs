@@ -48,10 +48,7 @@ pub async fn run(db: &impl db::Handler, args: SummaryArgs) -> Result<()> {
             continue;
         }
 
-        let to_email = match &user.email {
-            Some(e) if !e.is_empty() => e.clone(),
-            _ => continue,
-        };
+        let to_email = user.email.clone();
 
         // Determine which locations this user wants in their daily summary.
         let summary_location_ids: Vec<String> = user

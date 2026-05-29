@@ -115,7 +115,7 @@ export default function UserEdit() {
               type="email"
               name="email"
               id="email"
-              defaultValue={user.email || ""}
+              defaultValue={user.email}
               required
             />
           </dd>

@@ -1,5 +1,5 @@
 /**
- * @generated SignedSource<<95882904e49968d23c90439d982d75e6>>
+ * @generated SignedSource<<68ccb470e3c2dd844c777cb69317026e>>
  * @lightSyntaxTransform
  * @nogrep
  */
@@ -16,7 +16,7 @@ export type UserNewMutation$variables = {
 };
 export type UserNewMutation$data = {
   readonly createUser: {
-    readonly email: string | null | undefined;
+    readonly email: string;
     readonly id: string;
   };
 };

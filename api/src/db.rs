@@ -84,7 +84,7 @@ pub trait HasID {
 #[derive(Clone, Debug, PartialEq)]
 pub struct User {
     pub id: String,
-    pub email: Option<String>,
+    pub email: String,
     pub is_super: bool,
     pub is_dev: bool,
     pub enabled: bool,
