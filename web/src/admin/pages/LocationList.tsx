@@ -1,3 +1,4 @@
+import { useState } from "react";
 import {
   graphql,
   useFragment,
@@ -7,7 +8,7 @@ import {
 import type { LocationList_item$key } from "./__generated__/LocationList_item.graphql";
 import type { LocationListQuery } from "./__generated__/LocationListQuery.graphql";
 import { Link, useNavigate } from "react-router";
-import type { LocationListDisableMutation } from "./__generated__/LocationListDisableMutation.graphql";
+import type { LocationListToggleMutation } from "./__generated__/LocationListToggleMutation.graphql";
 import type { LocationListEnqueueSyncMutation } from "./__generated__/LocationListEnqueueSyncMutation.graphql";
 import { useSettingsDispatch } from "../../lib/settings";
 import { formatFullDateTime } from "../../lib/time";
@@ -36,16 +37,17 @@ function Row(props: {
   );
 
   const [commitMutation, isMutationInFlight] =
-    useMutation<LocationListDisableMutation>(graphql`
-      mutation LocationListDisableMutation(
+    useMutation<LocationListToggleMutation>(graphql`
+      mutation LocationListToggleMutation(
         $id: ID!
         $name: String!
+        $enabled: Boolean!
         $nitcEnabled: Int
       ) {
         updateLocation(
           id: $id
           name: $name
-          enabled: false
+          enabled: $enabled
           nitcEnabled: $nitcEnabled
         ) {
           id
@@ -67,9 +69,10 @@ function Row(props: {
     commitSync({ variables: { locationId: location.id } });
   }
 
-  async function disableLocation() {
+  async function toggleEnabled() {
+    const action = location.enabled ? "disable" : "enable";
     const yes = confirm(
-      `Are you sure you want to disable location ${location.name}?`,
+      `Are you sure you want to ${action} location ${location.name}?`,
     );
     if (yes) {
       await new Promise((resolve, reject) => {
@@ -78,6 +81,7 @@ function Row(props: {
             id: location.id,
             name: location.name,
             nitcEnabled: location.nitcEnabled,
+            enabled: !location.enabled,
           },
           onCompleted: resolve,
           onError: reject,
@@ -124,15 +128,13 @@ function Row(props: {
         </button>
         &nbsp;
         <Link to={`/admin/locations/${location.id}`}>Edit</Link>&nbsp;
-        {location.enabled && (
-          <button
-            className="delete"
-            onClick={disableLocation}
-            disabled={isMutationInFlight}
-          >
-            Disable
-          </button>
-        )}
+        <button
+          className={location.enabled ? "delete" : ""}
+          onClick={toggleEnabled}
+          disabled={isMutationInFlight}
+        >
+          {location.enabled ? "Disable" : "Enable"}
+        </button>
       </td>
     </tr>
   );
@@ -140,12 +142,14 @@ function Row(props: {
 
 export default function LocationList() {
   const { isDev } = useUserInfo();
+  const [showDisabled, setShowDisabled] = useState(false);
   const data = useLazyLoadQuery<LocationListQuery>(
     graphql`
       query LocationListQuery {
         locations {
           id
           name
+          enabled
           ...LocationList_item
         }
       }
@@ -155,6 +159,7 @@ export default function LocationList() {
 
   const locations = data?.locations
     ?.filter((location) => location != null)
+    .filter((location) => showDisabled || location.enabled)
     .sort((a, b) => {
       const aName = a.name ?? "";
       const bName = b.name ?? "";
@@ -163,6 +168,16 @@ export default function LocationList() {
 
   return (
     <>
+      <p>
+        <label>
+          <input
+            type="checkbox"
+            checked={showDisabled}
+            onChange={(e) => setShowDisabled(e.target.checked)}
+          />{" "}
+          Show disabled
+        </label>
+      </p>
       <table className="admin">
         <thead>
           <tr>

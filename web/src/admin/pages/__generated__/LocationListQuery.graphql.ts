@@ -1,5 +1,5 @@
 /**
- * @generated SignedSource<<e63dfe5dd17f4c552d8f9ea8a977595e>>
+ * @generated SignedSource<<f7f9d0d7becb081d6f4023d930411704>>
  * @lightSyntaxTransform
  * @nogrep
  */
@@ -13,6 +13,7 @@ import { FragmentRefs } from "relay-runtime";
 export type LocationListQuery$variables = Record<PropertyKey, never>;
 export type LocationListQuery$data = {
   readonly locations: ReadonlyArray<{
+    readonly enabled: boolean;
     readonly id: string;
     readonly name: string;
     readonly " $fragmentSpreads": FragmentRefs<"LocationList_item">;
@@ -37,6 +38,13 @@ v1 = {
   "kind": "ScalarField",
   "name": "name",
   "storageKey": null
+},
+v2 = {
+  "alias": null,
+  "args": null,
+  "kind": "ScalarField",
+  "name": "enabled",
+  "storageKey": null
 };
 return {
   "fragment": {
@@ -55,6 +63,7 @@ return {
         "selections": [
           (v0/*: any*/),
           (v1/*: any*/),
+          (v2/*: any*/),
           {
             "args": null,
             "kind": "FragmentSpread",
@@ -83,13 +92,7 @@ return {
         "selections": [
           (v0/*: any*/),
           (v1/*: any*/),
-          {
-            "alias": null,
-            "args": null,
-            "kind": "ScalarField",
-            "name": "enabled",
-            "storageKey": null
-          },
+          (v2/*: any*/),
           {
             "alias": null,
             "args": null,
@@ -110,16 +113,16 @@ return {
     ]
   },
   "params": {
-    "cacheID": "e63a3943d79dab56b60e174e8280dff7",
+    "cacheID": "077f54c7fdd5f3b16e8ccff3a65cd2e8",
     "id": null,
     "metadata": {},
     "name": "LocationListQuery",
     "operationKind": "query",
-    "text": "query LocationListQuery {\n  locations {\n    id\n    name\n    ...LocationList_item\n  }\n}\n\nfragment LocationList_item on Location {\n  id\n  name\n  enabled\n  nitcEnabled\n  lastSuccessfulMemberSync\n}\n"
+    "text": "query LocationListQuery {\n  locations {\n    id\n    name\n    enabled\n    ...LocationList_item\n  }\n}\n\nfragment LocationList_item on Location {\n  id\n  name\n  enabled\n  nitcEnabled\n  lastSuccessfulMemberSync\n}\n"
   }
 };
 })();
 
-(node as any).hash = "fa11e97ce1d9ee533e68d19184bd58dc";
+(node as any).hash = "7582c1fb5c6492f624346b776366c4be";
 
 export default node;

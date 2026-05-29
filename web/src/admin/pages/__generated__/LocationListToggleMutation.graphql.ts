@@ -1,5 +1,5 @@
 /**
- * @generated SignedSource<<9423a971737e9acec45b61d5dee98e6c>>
+ * @generated SignedSource<<cf0f08d62d5e21c099e9b11012ac93cd>>
  * @lightSyntaxTransform
  * @nogrep
  */
@@ -9,12 +9,13 @@
 // @ts-nocheck
 
 import { ConcreteRequest } from 'relay-runtime';
-export type LocationListDisableMutation$variables = {
+export type LocationListToggleMutation$variables = {
+  enabled: boolean;
   id: string;
   name: string;
   nitcEnabled?: number | null | undefined;
 };
-export type LocationListDisableMutation$data = {
+export type LocationListToggleMutation$data = {
   readonly updateLocation: {
     readonly enabled: boolean;
     readonly id: string;
@@ -22,37 +23,40 @@ export type LocationListDisableMutation$data = {
     readonly nitcEnabled: number | null | undefined;
   };
 };
-export type LocationListDisableMutation = {
-  response: LocationListDisableMutation$data;
-  variables: LocationListDisableMutation$variables;
+export type LocationListToggleMutation = {
+  response: LocationListToggleMutation$data;
+  variables: LocationListToggleMutation$variables;
 };
 
 const node: ConcreteRequest = (function(){
-var v0 = [
-  {
-    "defaultValue": null,
-    "kind": "LocalArgument",
-    "name": "id"
-  },
-  {
-    "defaultValue": null,
-    "kind": "LocalArgument",
-    "name": "name"
-  },
-  {
-    "defaultValue": null,
-    "kind": "LocalArgument",
-    "name": "nitcEnabled"
-  }
-],
-v1 = [
+var v0 = {
+  "defaultValue": null,
+  "kind": "LocalArgument",
+  "name": "enabled"
+},
+v1 = {
+  "defaultValue": null,
+  "kind": "LocalArgument",
+  "name": "id"
+},
+v2 = {
+  "defaultValue": null,
+  "kind": "LocalArgument",
+  "name": "name"
+},
+v3 = {
+  "defaultValue": null,
+  "kind": "LocalArgument",
+  "name": "nitcEnabled"
+},
+v4 = [
   {
     "alias": null,
     "args": [
       {
-        "kind": "Literal",
+        "kind": "Variable",
         "name": "enabled",
-        "value": false
+        "variableName": "enabled"
       },
       {
         "kind": "Variable",
@@ -109,32 +113,42 @@ v1 = [
 ];
 return {
   "fragment": {
-    "argumentDefinitions": (v0/*: any*/),
+    "argumentDefinitions": [
+      (v0/*: any*/),
+      (v1/*: any*/),
+      (v2/*: any*/),
+      (v3/*: any*/)
+    ],
     "kind": "Fragment",
     "metadata": null,
-    "name": "LocationListDisableMutation",
-    "selections": (v1/*: any*/),
+    "name": "LocationListToggleMutation",
+    "selections": (v4/*: any*/),
     "type": "MutationRoot",
     "abstractKey": null
   },
   "kind": "Request",
   "operation": {
-    "argumentDefinitions": (v0/*: any*/),
+    "argumentDefinitions": [
+      (v1/*: any*/),
+      (v2/*: any*/),
+      (v0/*: any*/),
+      (v3/*: any*/)
+    ],
     "kind": "Operation",
-    "name": "LocationListDisableMutation",
-    "selections": (v1/*: any*/)
+    "name": "LocationListToggleMutation",
+    "selections": (v4/*: any*/)
   },
   "params": {
-    "cacheID": "e3b44147021b2e8178d19d28d73ab6ab",
+    "cacheID": "1b1d71d9d6f7823cc5cf3dcffadda2be",
     "id": null,
     "metadata": {},
-    "name": "LocationListDisableMutation",
+    "name": "LocationListToggleMutation",
     "operationKind": "mutation",
-    "text": "mutation LocationListDisableMutation(\n  $id: ID!\n  $name: String!\n  $nitcEnabled: Int\n) {\n  updateLocation(id: $id, name: $name, enabled: false, nitcEnabled: $nitcEnabled) {\n    id\n    name\n    enabled\n    nitcEnabled\n  }\n}\n"
+    "text": "mutation LocationListToggleMutation(\n  $id: ID!\n  $name: String!\n  $enabled: Boolean!\n  $nitcEnabled: Int\n) {\n  updateLocation(id: $id, name: $name, enabled: $enabled, nitcEnabled: $nitcEnabled) {\n    id\n    name\n    enabled\n    nitcEnabled\n  }\n}\n"
   }
 };
 })();
 
-(node as any).hash = "c6cbd1d3327f1e106fb8dfded8384ac7";
+(node as any).hash = "6ce0e21af7c1cfb0642b69ce565e27c2";
 
 export default node;
