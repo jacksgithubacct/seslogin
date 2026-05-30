@@ -1,4 +1,3 @@
-import { useCallback } from "react";
 import { graphql, useMutation } from "react-relay";
 import type { KioskSetupFormMutation } from "./__generated__/KioskSetupFormMutation.graphql";
 import useKioskEnvironment from "./useKioskEnvironment";
@@ -14,31 +13,28 @@ export default function KioskSetupForm() {
   const [commitMutation, isMutationInFlight] =
     useMutation<KioskSetupFormMutation>(kioskSetupFormMutation);
 
-  const onSubmit = useCallback(
-    async (data: FormData) => {
-      const code = data.get("code")?.toString() || "";
+  const onSubmit = async (data: FormData) => {
+    const code = data.get("code")?.toString() || "";
 
-      await new Promise<void>((resolve) =>
-        commitMutation({
-          variables: { code },
-          onCompleted: (res: { authSession?: string | null }) => {
-            if (res.authSession) {
-              setToken(res.authSession);
-            } else {
-              alert("Login failed");
-            }
-            resolve();
-          },
-          onError: (error: Error) => {
-            console.log(error);
-            alert("Login failed: " + error.message);
-            resolve();
-          },
-        }),
-      );
-    },
-    [commitMutation, setToken],
-  );
+    await new Promise<void>((resolve) =>
+      commitMutation({
+        variables: { code },
+        onCompleted: (res: { authSession?: string | null }) => {
+          if (res.authSession) {
+            setToken(res.authSession);
+          } else {
+            alert("Login failed");
+          }
+          resolve();
+        },
+        onError: (error: Error) => {
+          console.log(error);
+          alert("Login failed: " + error.message);
+          resolve();
+        },
+      }),
+    );
+  };
 
   return (
     <section className="action-panel">

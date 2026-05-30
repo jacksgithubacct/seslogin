@@ -1,4 +1,3 @@
-import { useCallback } from "react";
 import { graphql, useMutation } from "react-relay";
 import { startRegistration } from "@simplewebauthn/browser";
 import type { usePasskeyRegistrationBeginMutation } from "./__generated__/usePasskeyRegistrationBeginMutation.graphql";
@@ -43,43 +42,40 @@ export function usePasskeyRegistration() {
     `,
   );
 
-  return useCallback(
-    async (name: string): Promise<void> => {
-      const begin = await new Promise<{
-        challengeId: string;
-        optionsJson: string;
-      }>((resolve, reject) => {
-        commitBegin({
-          variables: {},
-          onCompleted: (resp) => {
-            if (resp.beginPasskeyRegistration) {
-              resolve(resp.beginPasskeyRegistration);
-            } else {
-              reject(new Error("Failed to start passkey registration"));
-            }
-          },
-          onError: reject,
-        });
+  return async (name: string): Promise<void> => {
+    const begin = await new Promise<{
+      challengeId: string;
+      optionsJson: string;
+    }>((resolve, reject) => {
+      commitBegin({
+        variables: {},
+        onCompleted: (resp) => {
+          if (resp.beginPasskeyRegistration) {
+            resolve(resp.beginPasskeyRegistration);
+          } else {
+            reject(new Error("Failed to start passkey registration"));
+          }
+        },
+        onError: reject,
       });
+    });
 
-      const optionsJSON = JSON.parse(begin.optionsJson);
-      const regResponse = await startRegistration({ optionsJSON });
+    const optionsJSON = JSON.parse(begin.optionsJson);
+    const regResponse = await startRegistration({ optionsJSON });
 
-      await new Promise<void>((resolve, reject) => {
-        commitFinish({
-          variables: {
-            challengeId: begin.challengeId,
-            credentialJson: JSON.stringify(regResponse),
-            name,
-          },
-          onCompleted: () => resolve(),
-          onError: reject,
-          updater: (store) => {
-            store.invalidateStore();
-          },
-        });
+    await new Promise<void>((resolve, reject) => {
+      commitFinish({
+        variables: {
+          challengeId: begin.challengeId,
+          credentialJson: JSON.stringify(regResponse),
+          name,
+        },
+        onCompleted: () => resolve(),
+        onError: reject,
+        updater: (store) => {
+          store.invalidateStore();
+        },
       });
-    },
-    [commitBegin, commitFinish],
-  );
+    });
+  };
 }

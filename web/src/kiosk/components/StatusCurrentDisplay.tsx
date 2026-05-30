@@ -1,5 +1,4 @@
 import "./StatusCurrentDisplay.css";
-import { useMemo } from "react";
 import { formatTimeDiff } from "../../lib/time";
 import ClientVersionLabel from "../../components/ClientVersionLabel";
 
@@ -30,10 +29,7 @@ type Props = {
 };
 
 export default function StatusCurrentDisplay({ periods }: Props) {
-  const sortedPeriods = useMemo(
-    () => [...periods].sort((a, b) => a.startTime - b.startTime),
-    [periods],
-  );
+  const sortedPeriods = [...periods].sort((a, b) => a.startTime - b.startTime);
 
   return (
     <div id="status-current">

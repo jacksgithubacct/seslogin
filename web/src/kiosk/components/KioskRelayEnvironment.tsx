@@ -15,8 +15,6 @@ export default function KioskRelayEnvironment({
   onUnauthorized: () => void;
   children: ReactNode;
 }) {
-  console.log("[KioskRelayEnvironment] render");
-
   const environment = useMemo(() => {
     return createKioskGraphQLEnvironment(getToken, () => {
       onUnauthorized();

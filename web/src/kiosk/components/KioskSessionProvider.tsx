@@ -41,7 +41,6 @@ export function KioskSessionProvider({
   setToken: (token: string) => void;
   children: ReactNode;
 }) {
-  console.log("[KioskSessionProvider] render");
   const environment = useRelayEnvironment();
   const [session, setSession] = useState<KioskSession | null>(null);
   const [isInitialFetchComplete, setIsInitialFetchComplete] = useState(false);
@@ -59,7 +58,6 @@ export function KioskSessionProvider({
   );
 
   useEffect(() => {
-    console.log("[KioskSessionProvider] Starting session fetcher");
     return startKioskTokenSessionFetcher({
       environment,
       setToken,
