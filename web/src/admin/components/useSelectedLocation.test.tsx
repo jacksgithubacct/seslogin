@@ -22,7 +22,6 @@ describe("useSelectedLocation", () => {
     });
     vi.mocked(useUserInfo).mockReturnValue({
       id: "user-1",
-      username: "tester",
       email: "tester@example.com",
       isSuper: false,
       isDev: false,
@@ -40,7 +39,6 @@ describe("useSelectedLocation", () => {
     });
     vi.mocked(useUserInfo).mockReturnValue({
       id: "user-1",
-      username: "tester",
       email: "tester@example.com",
       isSuper: false,
       isDev: false,
@@ -58,7 +56,6 @@ describe("useSelectedLocation", () => {
     });
     vi.mocked(useUserInfo).mockReturnValue({
       id: "user-1",
-      username: "tester",
       email: "tester@example.com",
       isSuper: false,
       isDev: false,

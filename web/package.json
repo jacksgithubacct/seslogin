@@ -9,7 +9,8 @@
   "scripts": {
     "start": "vite",
     "dev": "vite",
-    "build": "VITE_CLIENT_VERSION=${VITE_CLIENT_VERSION:-dev} vite build",
+    "typecheck": "tsc -b",
+    "build": "tsc -b && VITE_CLIENT_VERSION=${VITE_CLIENT_VERSION:-dev} vite build",
     "test:unit": "vitest run",
     "test": "vitest run",
     "lint": "eslint .",

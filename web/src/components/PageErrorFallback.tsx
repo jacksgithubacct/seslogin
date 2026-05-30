@@ -7,11 +7,12 @@ export default function PageErrorFallback({
   showDetailsByDefault = false,
 }: FallbackProps & { showDetailsByDefault?: boolean }) {
   const [showDetails, setShowDetails] = useState(showDetailsByDefault);
+  const message = error instanceof Error ? error.message : String(error);
 
   return (
     <div role="alert">
       <p>Something went wrong</p>
-      {showDetails ? <pre style={{ color: "red" }}>{error.message}</pre> : null}
+      {showDetails ? <pre style={{ color: "red" }}>{message}</pre> : null}
       <button className="action-button" onClick={resetErrorBoundary}>
         Try again
       </button>

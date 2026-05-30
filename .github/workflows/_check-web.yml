@@ -21,6 +21,8 @@ jobs:
         run: cd web && npx prettier --check .
       - name: Run linter
         run: cd web && npm run lint
+      - name: Typecheck
+        run: cd web && npm run typecheck
       - name: Run tests
         run: cd web && npm test
       - name: Build (just for checking)

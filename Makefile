@@ -26,6 +26,7 @@ pre-commit-checks:
 	@cd web && npm run relay
 	@cd web && npx prettier --check .
 	@cd web && npm run lint
+	@cd web && npm run typecheck
 	@cd web && npm run build
 	@echo "Running API checks..."
 	@cd api && cargo fmt --check
