@@ -17,6 +17,7 @@ use crate::auth;
 use crate::auth::AuthInfo;
 use crate::db;
 use crate::db::Handler;
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use hex;
 
 use super::auth::{AuthGuard, AuthRequirement, require_location_access, require_writable};
@@ -1368,7 +1369,7 @@ impl<A: App + HasDb + HasSqs + Send + Sync + 'static> MutationRoot<A> {
             return Err(anyhow!("Maximum of 10 passkeys allowed"));
         }
 
-        let cred_id = passkey.cred_id().to_string();
+        let cred_id = URL_SAFE_NO_PAD.encode(passkey.cred_id().as_ref());
         let passkey_json = serde_json::to_string(&passkey)
             .map_err(|e| anyhow!("Failed to serialize passkey: {}", e))?;
 
@@ -1466,8 +1467,7 @@ impl<A: App + HasDb + HasSqs + Send + Sync + 'static> MutationRoot<A> {
             .identify_discoverable_authentication(&auth_credential)
             .map_err(|e| anyhow!("Failed to identify credential: {}", e))?;
 
-        let cred_id_str =
-            webauthn_rs::prelude::Base64UrlSafeData(cred_id_bytes.to_vec()).to_string();
+        let cred_id_str = URL_SAFE_NO_PAD.encode(cred_id_bytes);
         let stored = match self.app.db().get_webauthn_credential(&cred_id_str).await? {
             Some(c) => c,
             None => {
@@ -1608,4 +1608,30 @@ impl<A: App + HasDb + HasSqs + Send + Sync + 'static> MutationRoot<A> {
 struct PasskeyChallenge {
     challenge_id: String,
     options_json: String,
+}
+
+#[cfg(test)]
+mod tests {
+    // Sanitized fixture captured from a real 0.4.x Passkey serialization. Key bytes are zeroed.
+    // This test exists to catch webauthn-rs serde format changes during library upgrades — if
+    // deserialization breaks here after a version bump, stored passkeys in DynamoDB are at risk.
+    const PASSKEY_JSON_V0_4: &str = r#"{"cred":{"cred_id":"AAAAAAAAAAAAAAAAAAAAAAAAAAAA","cred":{"type_":"ES256","key":{"EC_EC2":{"curve":"SECP256R1","x":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","y":"BAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}}},"counter":0,"transports":null,"user_verified":true,"backup_eligible":true,"backup_state":true,"registration_policy":"preferred","extensions":{"cred_protect":"NotRequested","hmac_create_secret":"NotRequested","appid":"NotRequested","cred_props":"Ignored"},"attestation":{"data":"None","metadata":"None"},"attestation_format":"None"}}"#;
+
+    #[test]
+    fn passkey_json_round_trips() {
+        use webauthn_rs::prelude::Passkey;
+        let passkey: Passkey = serde_json::from_str(PASSKEY_JSON_V0_4).expect(
+            "stored passkey JSON must deserialize — format changed after webauthn-rs upgrade?",
+        );
+        let reserialized =
+            serde_json::to_string(&passkey).expect("passkey must reserialize to JSON");
+        let reparsed: Passkey =
+            serde_json::from_str(&reserialized).expect("reserialized passkey must round-trip");
+        let rereserialized =
+            serde_json::to_string(&reparsed).expect("reparsed passkey must reserialize");
+        assert_eq!(
+            reserialized, rereserialized,
+            "passkey JSON must be stable across serde round trips"
+        );
+    }
 }
