@@ -75,6 +75,14 @@ impl<A: App + HasDb + Send + Sync + 'static> User<A> {
         self.rec.access_time.map(|t| t as i64)
     }
 
+    async fn created_at(&self) -> Option<i64> {
+        self.rec.created_at.map(|t| t as i64)
+    }
+
+    async fn updated_at(&self) -> Option<i64> {
+        self.rec.updated_at.map(|t| t as i64)
+    }
+
     async fn email_summary_location_ids(&self) -> Vec<String> {
         self.rec
             .email_config
@@ -208,6 +216,14 @@ impl<A: App + HasDb + Send + Sync + 'static> Category<A> {
         let app = ctx.data_unchecked::<Arc<A>>();
         Ok(app.db().get_nitc_group(gid).await?.map(NitcGroup::new))
     }
+
+    async fn created_at(&self) -> Option<i64> {
+        self.rec.created_at.map(|t| t as i64)
+    }
+
+    async fn updated_at(&self) -> Option<i64> {
+        self.rec.updated_at.map(|t| t as i64)
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -266,6 +282,14 @@ impl<A: App + HasDb + Send + Sync> Person<A> {
 
     async fn deleted(&self) -> bool {
         self.rec.deleted.is_some()
+    }
+
+    async fn created_at(&self) -> Option<i64> {
+        self.rec.created_at.map(|t| t as i64)
+    }
+
+    async fn updated_at(&self) -> Option<i64> {
+        self.rec.updated_at.map(|t| t as i64)
     }
 
     async fn periods<'ctx>(
@@ -438,6 +462,14 @@ impl<A: App + HasDb + Send + Sync> Period<A> {
 
     async fn end_time(&self) -> Option<i64> {
         self.rec.end_time.map(|i| i as i64)
+    }
+
+    async fn created_at(&self) -> Option<i64> {
+        self.rec.created_at.map(|t| t as i64)
+    }
+
+    async fn updated_at(&self) -> Option<i64> {
+        self.rec.updated_at.map(|t| t as i64)
     }
 
     async fn signed_in_session_id(&self) -> Option<ID> {
@@ -766,6 +798,14 @@ impl<A: App + HasDb + Send + Sync> Location<A> {
 
     async fn last_successful_member_sync(&self) -> Option<i64> {
         self.rec.last_successful_member_sync.map(|t| t as i64)
+    }
+
+    async fn created_at(&self) -> Option<i64> {
+        self.rec.created_at.map(|t| t as i64)
+    }
+
+    async fn updated_at(&self) -> Option<i64> {
+        self.rec.updated_at.map(|t| t as i64)
     }
 
     async fn people(&self, ctx: &Context<'_>) -> Result<Vec<Person<A>>> {
@@ -1179,6 +1219,14 @@ impl<A: App + HasDb + Send + Sync + 'static> Session<A> {
     async fn config(&self) -> Json<serde_json::Map<String, serde_json::Value>> {
         Json(self.rec.config.clone())
     }
+
+    async fn created_at(&self) -> Option<i64> {
+        self.rec.created_at.map(|t| t as i64)
+    }
+
+    async fn updated_at(&self) -> Option<i64> {
+        self.rec.updated_at.map(|t| t as i64)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1351,6 +1399,14 @@ impl<A: App + HasDb + Send + Sync + 'static> NitcGroup<A> {
             .collect();
         tags.sort_by_key(|t| t.id);
         Ok(tags)
+    }
+
+    async fn created_at(&self) -> Option<i64> {
+        self.rec.created_at.map(|t| t as i64)
+    }
+
+    async fn updated_at(&self) -> Option<i64> {
+        self.rec.updated_at.map(|t| t as i64)
     }
 }
 

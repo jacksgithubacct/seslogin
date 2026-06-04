@@ -89,10 +89,7 @@ async fn fetch_update_user_auth_info<A: App + HasDb>(
     }
 
     // if access time is older than 1 minute ago then update it - helps reduce DB write load
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|e| AuthError::Transient(e.to_string()))?
-        .as_secs();
+    let now = crate::clock::now_sec();
     if user.access_time.is_none_or(|t| now > t + 60) {
         match app
             .db()
@@ -144,10 +141,7 @@ async fn fetch_update_session_auth_info<A: App + HasDb + HasSqs>(
     };
 
     // if access time is older than 1 minute ago then update it - helps reduce DB write load
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|e| AuthError::Transient(e.to_string()))?
-        .as_secs();
+    let now = crate::clock::now_sec();
     if session.last_contact.is_none_or(|t| now > t + 60) {
         let client_version = normalize_client_version(client_version);
         match app
@@ -212,10 +206,7 @@ async fn verify_token_with_api_token<A: App + HasDb>(
     if api_token.revoked_at.is_some() {
         return Err(AuthError::Permanent("API token has been revoked".into()));
     }
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|e| AuthError::Transient(e.to_string()))?
-        .as_secs();
+    let now = crate::clock::now_sec();
     if api_token.expires_at.is_some_and(|exp| now >= exp) {
         return Err(AuthError::Permanent("API token has expired".into()));
     }
@@ -270,10 +261,7 @@ async fn verify_token_with_user_token<A: App + HasDb>(
         .map_err(|e| classify_db_err("fetch user token by hash", e))?
         .ok_or_else(|| AuthError::Permanent("Invalid user token".into()))?;
 
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|e| AuthError::Transient(e.to_string()))?
-        .as_secs();
+    let now = crate::clock::now_sec();
 
     if now >= user_token.expires_at {
         return Err(AuthError::Permanent("User token has expired".into()));

@@ -16,8 +16,6 @@ use aws_sdk_dynamodb::types::{
 use aws_sdk_dynamodb::{Client, types::AttributeValue};
 use nanoid::nanoid;
 use std::collections::HashMap;
-use std::time::SystemTime;
-use std::time::UNIX_EPOCH;
 use thiserror::Error;
 
 const NANOID_ALPHABET: [char; 62] = [
@@ -152,6 +150,8 @@ impl TryInto<Category> for Item {
             enabled: self.bool_field("enabled")?.unwrap_or(false),
             nitc_participant_type: self.string_field("nitc_participant_type")?,
             nitc_group_id: self.string_field("nitc_group_id")?,
+            created_at: self.i64_field("created_at")?.map(|i| i as u64),
+            updated_at: self.i64_field("updated_at")?.map(|i| i as u64),
         })
     }
 }
@@ -193,6 +193,8 @@ impl TryInto<Location> for Item {
             last_successful_member_sync: self
                 .i64_field("last_successful_member_sync")?
                 .map(|i| i as u64),
+            created_at: self.i64_field("created_at")?.map(|i| i as u64),
+            updated_at: self.i64_field("updated_at")?.map(|i| i as u64),
         })
     }
 }
@@ -219,6 +221,8 @@ impl TryInto<User> for Item {
                         .map_err(|e| anyhow!("Invalid email_config JSON: {}", e))?,
                 }
             },
+            created_at: self.i64_field("created_at")?.map(|i| i as u64),
+            updated_at: self.i64_field("updated_at")?.map(|i| i as u64),
         })
     }
 }
@@ -239,6 +243,8 @@ impl TryInto<Person> for Item {
                 .i64_field("deleted")?
                 .map(|i| i as u64)
                 .filter(|&i| i != 0),
+            created_at: self.i64_field("created_at")?.map(|i| i as u64),
+            updated_at: self.i64_field("updated_at")?.map(|i| i as u64),
         })
     }
 }
@@ -266,6 +272,8 @@ impl TryInto<Session> for Item {
             },
             healthcheck_url: self.string_field("healthcheck_url")?,
             legacy_id: self.string_field("legacy_id")?,
+            created_at: self.i64_field("created_at")?.map(|i| i as u64),
+            updated_at: self.i64_field("updated_at")?.map(|i| i as u64),
         })
     }
 }
@@ -410,6 +418,8 @@ impl TryInto<Period> for Item {
                 .i64_field("deleted")?
                 .map(|i| i as u64)
                 .filter(|&i| i != 0),
+            created_at: self.i64_field("created_at")?.map(|i| i as u64),
+            updated_at: self.i64_field("updated_at")?.map(|i| i as u64),
         })
     }
 }
@@ -435,6 +445,8 @@ impl TryInto<db::NitcEvent> for Item {
             ses_api_nitc_id: self.i64_field("ses_api_nitc_id")?,
             version: self.i64_field("v")?.unwrap_or(1) as u64,
             synced_version: self.i64_field("synced_version")?.map(|i| i as u64),
+            created_at: self.i64_field("created_at")?.map(|i| i as u64),
+            updated_at: self.i64_field("updated_at")?.map(|i| i as u64),
         })
     }
 }
@@ -454,6 +466,8 @@ impl TryInto<db::NitcGroup> for Item {
             id: self.id(),
             nitc_type: self.string_field("nitc_type")?.unwrap_or_default(),
             nitc_tag_ids,
+            created_at: self.i64_field("created_at")?.map(|i| i as u64),
+            updated_at: self.i64_field("updated_at")?.map(|i| i as u64),
         })
     }
 }
@@ -721,6 +735,7 @@ impl db::Handler for Handler {
             return Err(db::Error::MutationDisabled);
         }
         let id = new_id();
+        let now = crate::clock::now_sec();
         let av_location_grants = if location_grants.is_empty() {
             AttributeValue::Null(true)
         } else {
@@ -734,16 +749,8 @@ impl db::Handler for Handler {
             .item("id", AttributeValue::S(id.clone()))
             .item("email", AttributeValue::S(email.to_string()))
             .item("super", AttributeValue::Bool(is_super))
-            .item(
-                "created_at",
-                AttributeValue::N(
-                    SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .unwrap()
-                        .as_secs()
-                        .to_string(),
-                ),
-            )
+            .item("created_at", AttributeValue::N(now.to_string()))
+            .item("updated_at", AttributeValue::N(now.to_string()))
             .item("location_grants", av_location_grants)
             .item("enabled", AttributeValue::N("1".to_string()))
             .return_consumed_capacity(ReturnConsumedCapacity::Total)
@@ -761,6 +768,8 @@ impl db::Handler for Handler {
             enabled: true,
             access_time: None,
             email_config: serde_json::Map::new(),
+            created_at: Some(now),
+            updated_at: Some(now),
         })
     }
 
@@ -793,17 +802,21 @@ impl db::Handler for Handler {
                     .expression_attribute_values(":email", AttributeValue::S(email.to_string()))
                     .expression_attribute_values(":super", AttributeValue::Bool(is_super))
                     .expression_attribute_values(":dev", AttributeValue::Bool(is_dev))
-                    .expression_attribute_values(":location_grants", location_grants);
+                    .expression_attribute_values(":location_grants", location_grants)
+                    .expression_attribute_values(
+                        ":updated_at",
+                        AttributeValue::N(crate::clock::now_sec().to_string()),
+                    );
 
                 if enabled {
                     builder = builder
                         .update_expression(
-                            "SET email = :email, #super = :super, dev = :dev, location_grants = :location_grants, enabled = :enabled",
+                            "SET email = :email, #super = :super, dev = :dev, location_grants = :location_grants, enabled = :enabled, updated_at = :updated_at",
                         )
                         .expression_attribute_values(":enabled", AttributeValue::N("1".to_string()));
                 } else {
                     builder = builder.update_expression(
-                        "SET email = :email, #super = :super, dev = :dev, location_grants = :location_grants REMOVE enabled",
+                        "SET email = :email, #super = :super, dev = :dev, location_grants = :location_grants, updated_at = :updated_at REMOVE enabled",
                     );
                 }
 
@@ -815,10 +828,7 @@ impl db::Handler for Handler {
                 record_capacity("update_user", resp.consumed_capacity(), CapKind::Write);
             }
             db::UserUpdateShape::AccessTime => {
-                let unix_time = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs();
+                let unix_time = crate::clock::now_sec();
                 let resp = self
                     .client
                     .update_item()
@@ -844,8 +854,12 @@ impl db::Handler for Handler {
                     .table_name(self.table_name("user"))
                     .key("id", AttributeValue::S(id.to_string()))
                     .condition_expression("attribute_exists(id)")
-                    .update_expression("SET email_config = :cfg")
+                    .update_expression("SET email_config = :cfg, updated_at = :updated_at")
                     .expression_attribute_values(":cfg", AttributeValue::S(serialized))
+                    .expression_attribute_values(
+                        ":updated_at",
+                        AttributeValue::N(crate::clock::now_sec().to_string()),
+                    )
                     .return_consumed_capacity(ReturnConsumedCapacity::Total)
                     .send()
                     .await
@@ -1078,7 +1092,11 @@ impl db::Handler for Handler {
             .table_name(self.table_name("session"))
             .key("id", AttributeValue::S(id.to_string()))
             .condition_expression("attribute_exists(id)")
-            .update_expression("REMOVE code")
+            .update_expression("SET updated_at = :updated_at REMOVE code")
+            .expression_attribute_values(
+                ":updated_at",
+                AttributeValue::N(crate::clock::now_sec().to_string()),
+            )
             .return_consumed_capacity(ReturnConsumedCapacity::Total)
             .send()
             .await
@@ -1362,18 +1380,18 @@ impl db::Handler for Handler {
         if self.read_only {
             return Err(db::Error::MutationDisabled);
         }
-        let unix_time = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
+        let unix_time = crate::clock::now_sec();
 
         let resp = self
             .client
             .update_item()
             .table_name(self.table_name("period"))
             .key("id", AttributeValue::S(period.id.to_string()))
-            .update_expression("SET end_time = :end_time REMOVE location_open ADD v :one")
+            .update_expression(
+                "SET end_time = :end_time, updated_at = :updated_at REMOVE location_open ADD v :one",
+            )
             .expression_attribute_values(":end_time", AttributeValue::N(unix_time.to_string()))
+            .expression_attribute_values(":updated_at", AttributeValue::N(unix_time.to_string()))
             .expression_attribute_values(":one", AttributeValue::N("1".to_string()))
             .return_consumed_capacity(ReturnConsumedCapacity::Total)
             .send()
@@ -1383,6 +1401,7 @@ impl db::Handler for Handler {
 
         let mut updated = period.clone();
         updated.end_time = Some(unix_time);
+        updated.updated_at = Some(unix_time);
         Ok(updated)
     }
 
@@ -1396,10 +1415,7 @@ impl db::Handler for Handler {
             return Err(db::Error::MutationDisabled);
         }
         let id = new_id();
-        let unix_time = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
+        let unix_time = crate::clock::now_sec();
 
         let resp = self
             .client
@@ -1416,6 +1432,8 @@ impl db::Handler for Handler {
             .item("location_open", AttributeValue::S(location_id.to_string()))
             .item("location_live", AttributeValue::S(location_id.to_string()))
             .item("v", AttributeValue::N("1".to_string()))
+            .item("created_at", AttributeValue::N(unix_time.to_string()))
+            .item("updated_at", AttributeValue::N(unix_time.to_string()))
             .return_consumed_capacity(ReturnConsumedCapacity::Total)
             .send()
             .await
@@ -1440,6 +1458,8 @@ impl db::Handler for Handler {
             nitc_participant_id: None,
             nitc_exported_version: None,
             deleted: None,
+            created_at: Some(unix_time),
+            updated_at: Some(unix_time),
         })
     }
 
@@ -1454,6 +1474,7 @@ impl db::Handler for Handler {
             return Err(db::Error::MutationDisabled);
         }
         let id = new_id();
+        let now = crate::clock::now_sec();
 
         let resp = self
             .client
@@ -1468,6 +1489,8 @@ impl db::Handler for Handler {
                 AttributeValue::S(registration_number.to_string()),
             )
             .item("deleted", AttributeValue::N("0".to_string()))
+            .item("created_at", AttributeValue::N(now.to_string()))
+            .item("updated_at", AttributeValue::N(now.to_string()))
             .return_consumed_capacity(ReturnConsumedCapacity::Total)
             .send()
             .await
@@ -1482,6 +1505,8 @@ impl db::Handler for Handler {
             registration_number: Some(registration_number.to_string()),
             ses_api_person_id: None,
             deleted: None,
+            created_at: Some(now),
+            updated_at: Some(now),
         })
     }
 
@@ -1500,10 +1525,11 @@ impl db::Handler for Handler {
                     .table_name(self.table_name("person"))
                     .key("id", AttributeValue::S(id.to_string()))
                     .condition_expression("attribute_exists(id)")
-                    .update_expression("SET first_name = :first_name, last_name = :last_name, registration_number = :registration_number")
+                    .update_expression("SET first_name = :first_name, last_name = :last_name, registration_number = :registration_number, updated_at = :updated_at")
                     .expression_attribute_values(":first_name", AttributeValue::S(first_name.to_string()))
                     .expression_attribute_values(":last_name", AttributeValue::S(last_name.to_string()))
                     .expression_attribute_values(":registration_number", AttributeValue::S(registration_number.to_string()))
+                    .expression_attribute_values(":updated_at", AttributeValue::N(crate::clock::now_sec().to_string()))
                     .return_consumed_capacity(ReturnConsumedCapacity::Total)
                     .send()
                     .await
@@ -1517,10 +1543,14 @@ impl db::Handler for Handler {
                     .table_name(self.table_name("person"))
                     .key("id", AttributeValue::S(id.to_string()))
                     .condition_expression("attribute_exists(id)")
-                    .update_expression("SET location_id = :location_id")
+                    .update_expression("SET location_id = :location_id, updated_at = :updated_at")
                     .expression_attribute_values(
                         ":location_id",
                         AttributeValue::S(location_id.to_string()),
+                    )
+                    .expression_attribute_values(
+                        ":updated_at",
+                        AttributeValue::N(crate::clock::now_sec().to_string()),
                     )
                     .return_consumed_capacity(ReturnConsumedCapacity::Total)
                     .send()
@@ -1534,17 +1564,24 @@ impl db::Handler for Handler {
                     .update_item()
                     .table_name(self.table_name("person"))
                     .key("id", AttributeValue::S(id.to_string()))
-                    .condition_expression("attribute_exists(id)");
+                    .condition_expression("attribute_exists(id)")
+                    .expression_attribute_values(
+                        ":updated_at",
+                        AttributeValue::N(crate::clock::now_sec().to_string()),
+                    );
 
                 request = if let Some(v) = ses_api_person_id {
                     request
-                        .update_expression("SET ses_api_person_id = :ses_api_person_id")
+                        .update_expression(
+                            "SET ses_api_person_id = :ses_api_person_id, updated_at = :updated_at",
+                        )
                         .expression_attribute_values(
                             ":ses_api_person_id",
                             AttributeValue::S(v.to_string()),
                         )
                 } else {
-                    request.update_expression("REMOVE ses_api_person_id")
+                    request
+                        .update_expression("SET updated_at = :updated_at REMOVE ses_api_person_id")
                 };
 
                 let resp = request
@@ -1561,8 +1598,12 @@ impl db::Handler for Handler {
                     .table_name(self.table_name("person"))
                     .key("id", AttributeValue::S(id.to_string()))
                     .condition_expression("attribute_exists(id)")
-                    .update_expression("SET deleted = :deleted")
+                    .update_expression("SET deleted = :deleted, updated_at = :updated_at")
                     .expression_attribute_values(":deleted", AttributeValue::N("0".to_string()))
+                    .expression_attribute_values(
+                        ":updated_at",
+                        AttributeValue::N(crate::clock::now_sec().to_string()),
+                    )
                     .return_consumed_capacity(ReturnConsumedCapacity::Total)
                     .send()
                     .await
@@ -1570,19 +1611,19 @@ impl db::Handler for Handler {
                 record_capacity("update_person", resp.consumed_capacity(), CapKind::Write);
             }
             db::PersonUpdateShape::Delete => {
-                let deleted_time = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs()
-                    .to_string();
+                let deleted_time = crate::clock::now_sec().to_string();
                 let resp = self
                     .client
                     .update_item()
                     .table_name(self.table_name("person"))
                     .key("id", AttributeValue::S(id.to_string()))
                     .condition_expression("attribute_exists(id)")
-                    .update_expression("SET deleted = :deleted")
-                    .expression_attribute_values(":deleted", AttributeValue::N(deleted_time))
+                    .update_expression("SET deleted = :deleted, updated_at = :updated_at")
+                    .expression_attribute_values(
+                        ":deleted",
+                        AttributeValue::N(deleted_time.clone()),
+                    )
+                    .expression_attribute_values(":updated_at", AttributeValue::N(deleted_time))
                     .return_consumed_capacity(ReturnConsumedCapacity::Total)
                     .send()
                     .await
@@ -1606,6 +1647,7 @@ impl db::Handler for Handler {
             return Err(db::Error::MutationDisabled);
         }
         let id = new_id();
+        let now = crate::clock::now_sec();
 
         let resp = self
             .client
@@ -1619,6 +1661,8 @@ impl db::Handler for Handler {
             .item("category_id", AttributeValue::S(category_id.to_string()))
             .item("location_live", AttributeValue::S(location_id.to_string()))
             .item("v", AttributeValue::N("1".to_string()))
+            .item("created_at", AttributeValue::N(now.to_string()))
+            .item("updated_at", AttributeValue::N(now.to_string()))
             .return_consumed_capacity(ReturnConsumedCapacity::Total)
             .send()
             .await
@@ -1639,6 +1683,8 @@ impl db::Handler for Handler {
             nitc_participant_id: None,
             nitc_exported_version: None,
             deleted: None,
+            created_at: Some(now),
+            updated_at: Some(now),
         })
     }
 
@@ -1659,13 +1705,14 @@ impl db::Handler for Handler {
                     .table_name(self.table_name("period"))
                     .key("id", AttributeValue::S(id.to_string()))
                     .condition_expression("attribute_exists(id)")
-                    .update_expression("SET person_id = :person_id, location_id = :location_id, start_time = :start_time, end_time = :end_time, category_id = :category_id, location_live = :location_id REMOVE location_open ADD v :one")
+                    .update_expression("SET person_id = :person_id, location_id = :location_id, start_time = :start_time, end_time = :end_time, category_id = :category_id, location_live = :location_id, updated_at = :updated_at REMOVE location_open ADD v :one")
                     .expression_attribute_values(":person_id", AttributeValue::S(person_id.to_string()))
                     .expression_attribute_values(":location_id", AttributeValue::S(location_id.to_string()))
                     .expression_attribute_values(":start_time", AttributeValue::N(start_time.to_string()))
                     .expression_attribute_values(":end_time", AttributeValue::N(end_time.to_string()))
                     .expression_attribute_values(":category_id", AttributeValue::S(category_id.to_string()))
                     .expression_attribute_values(":one", AttributeValue::N("1".to_string()))
+                    .expression_attribute_values(":updated_at", AttributeValue::N(crate::clock::now_sec().to_string()))
                     .return_consumed_capacity(ReturnConsumedCapacity::Total)
                     .send()
                     .await
@@ -1679,9 +1726,9 @@ impl db::Handler for Handler {
                 signed_out_session_id,
             } => {
                 let set_expr = if signed_out_session_id.is_some() {
-                    "SET start_time = :start_time, end_time = :end_time, category_id = :category_id, signed_out_session_id = :signed_out_session_id REMOVE location_open ADD v :one"
+                    "SET start_time = :start_time, end_time = :end_time, category_id = :category_id, signed_out_session_id = :signed_out_session_id, updated_at = :updated_at REMOVE location_open ADD v :one"
                 } else {
-                    "SET start_time = :start_time, end_time = :end_time, category_id = :category_id REMOVE location_open ADD v :one"
+                    "SET start_time = :start_time, end_time = :end_time, category_id = :category_id, updated_at = :updated_at REMOVE location_open ADD v :one"
                 };
                 let mut update = self
                     .client
@@ -1702,7 +1749,11 @@ impl db::Handler for Handler {
                         ":category_id",
                         AttributeValue::S(category_id.to_string()),
                     )
-                    .expression_attribute_values(":one", AttributeValue::N("1".to_string()));
+                    .expression_attribute_values(":one", AttributeValue::N("1".to_string()))
+                    .expression_attribute_values(
+                        ":updated_at",
+                        AttributeValue::N(crate::clock::now_sec().to_string()),
+                    );
                 if let Some(session_id) = signed_out_session_id {
                     update = update.expression_attribute_values(
                         ":signed_out_session_id",
@@ -1717,11 +1768,7 @@ impl db::Handler for Handler {
                 record_capacity("update_period", resp.consumed_capacity(), CapKind::Write);
             }
             db::PeriodUpdateShape::Delete => {
-                let deleted_time = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs()
-                    .to_string();
+                let deleted_time = crate::clock::now_sec().to_string();
 
                 let resp = self
                     .client
@@ -1730,9 +1777,10 @@ impl db::Handler for Handler {
                     .key("id", AttributeValue::S(id.to_string()))
                     .condition_expression("attribute_exists(id)")
                     .update_expression(
-                        "SET deleted = :deleted REMOVE location_open, location_live ADD v :one",
+                        "SET deleted = :deleted, updated_at = :updated_at REMOVE location_open, location_live ADD v :one",
                     )
-                    .expression_attribute_values(":deleted", AttributeValue::N(deleted_time))
+                    .expression_attribute_values(":deleted", AttributeValue::N(deleted_time.clone()))
+                    .expression_attribute_values(":updated_at", AttributeValue::N(deleted_time))
                     .expression_attribute_values(":one", AttributeValue::N("1".to_string()))
                     .return_consumed_capacity(ReturnConsumedCapacity::Total)
                     .send()
@@ -1756,10 +1804,7 @@ impl db::Handler for Handler {
             return Err(db::Error::MutationDisabled);
         }
         let id = new_id();
-        let unix_time = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
+        let unix_time = crate::clock::now_sec();
         let serialized_config =
             serde_json::to_string(config).map_err(|e| Error::TypeConversion(e.to_string()))?;
 
@@ -1775,6 +1820,8 @@ impl db::Handler for Handler {
             .item("code", AttributeValue::S(code.clone()))
             .item("last_contact", AttributeValue::N(unix_time.to_string()))
             .item("config", AttributeValue::S(serialized_config))
+            .item("created_at", AttributeValue::N(unix_time.to_string()))
+            .item("updated_at", AttributeValue::N(unix_time.to_string()))
             .item("active", AttributeValue::N("1".to_string()));
 
         if let Some(healthcheck_url) = healthcheck_url {
@@ -1801,6 +1848,8 @@ impl db::Handler for Handler {
             config: config.clone(),
             healthcheck_url: healthcheck_url.map(str::to_string),
             legacy_id: None,
+            created_at: Some(unix_time),
+            updated_at: Some(unix_time),
         })
     }
 
@@ -1823,12 +1872,16 @@ impl db::Handler for Handler {
                     .key("id", AttributeValue::S(id.to_string()))
                     .expression_attribute_names("#name", "name")
                     .expression_attribute_values(":name", AttributeValue::S(name.to_string()))
-                    .expression_attribute_values(":config", AttributeValue::S(config));
+                    .expression_attribute_values(":config", AttributeValue::S(config))
+                    .expression_attribute_values(
+                        ":updated_at",
+                        AttributeValue::N(crate::clock::now_sec().to_string()),
+                    );
 
                 request = if let Some(healthcheck_url) = healthcheck_url {
                     request
                         .update_expression(
-                            "SET #name = :name, config = :config, healthcheck_url = :healthcheck_url",
+                            "SET #name = :name, config = :config, healthcheck_url = :healthcheck_url, updated_at = :updated_at",
                         )
                         .expression_attribute_values(
                             ":healthcheck_url",
@@ -1836,7 +1889,7 @@ impl db::Handler for Handler {
                         )
                 } else {
                     request.update_expression(
-                        "SET #name = :name, config = :config REMOVE healthcheck_url",
+                        "SET #name = :name, config = :config, updated_at = :updated_at REMOVE healthcheck_url",
                     )
                 };
 
@@ -1848,10 +1901,7 @@ impl db::Handler for Handler {
                 record_capacity("update_session", resp.consumed_capacity(), CapKind::Write);
             }
             db::SessionUpdateShape::Info { client_version } => {
-                let unix_time = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs();
+                let unix_time = crate::clock::now_sec();
 
                 let mut update = self
                     .client
@@ -1889,7 +1939,11 @@ impl db::Handler for Handler {
                     .update_item()
                     .table_name(self.table_name("session"))
                     .key("id", AttributeValue::S(id.to_string()))
-                    .update_expression("REMOVE active")
+                    .update_expression("SET updated_at = :updated_at REMOVE active")
+                    .expression_attribute_values(
+                        ":updated_at",
+                        AttributeValue::N(crate::clock::now_sec().to_string()),
+                    )
                     .return_consumed_capacity(ReturnConsumedCapacity::Total)
                     .send()
                     .await
@@ -1994,10 +2048,7 @@ impl db::Handler for Handler {
             return Err(db::Error::MutationDisabled);
         }
         let id = new_id();
-        let unix_time = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
+        let unix_time = crate::clock::now_sec();
 
         let mut request = self
             .client
@@ -2108,10 +2159,7 @@ impl db::Handler for Handler {
                 record_capacity("update_api_token", resp.consumed_capacity(), CapKind::Write);
             }
             db::ApiTokenUpdateShape::TouchLastUsed => {
-                let unix_time = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs();
+                let unix_time = crate::clock::now_sec();
                 let resp = self
                     .client
                     .update_item()
@@ -2134,10 +2182,7 @@ impl db::Handler for Handler {
                 );
             }
             db::ApiTokenUpdateShape::Revoke => {
-                let unix_time = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs();
+                let unix_time = crate::clock::now_sec();
                 let resp = self
                     .client
                     .update_item()
@@ -2169,6 +2214,7 @@ impl db::Handler for Handler {
             return Err(db::Error::MutationDisabled);
         }
         let id = new_id();
+        let now = crate::clock::now_sec();
 
         let mut req = self
             .client
@@ -2181,6 +2227,8 @@ impl db::Handler for Handler {
                 "nitc_enabled",
                 AttributeValue::N(nitc_enabled.unwrap_or(0).to_string()),
             )
+            .item("created_at", AttributeValue::N(now.to_string()))
+            .item("updated_at", AttributeValue::N(now.to_string()))
             .return_consumed_capacity(ReturnConsumedCapacity::Total);
 
         if let Some(hq_id) = ses_api_headquarters_id {
@@ -2203,6 +2251,8 @@ impl db::Handler for Handler {
             nitc_enabled,
             ses_api_headquarters_id: ses_api_headquarters_id.map(str::to_string),
             last_successful_member_sync: None,
+            created_at: Some(now),
+            updated_at: Some(now),
         })
     }
 
@@ -2266,7 +2316,7 @@ impl db::Handler for Handler {
                 nitc_enabled,
             } => base
                 .update_expression(
-                    "SET #name = :name, enabled = :enabled, nitc_enabled = :nitc_enabled",
+                    "SET #name = :name, enabled = :enabled, nitc_enabled = :nitc_enabled, updated_at = :updated_at",
                 )
                 .expression_attribute_names("#name", "name")
                 .expression_attribute_values(":name", AttributeValue::S(name.to_string()))
@@ -2274,6 +2324,10 @@ impl db::Handler for Handler {
                 .expression_attribute_values(
                     ":nitc_enabled",
                     AttributeValue::N(nitc_enabled.unwrap_or(0).to_string()),
+                )
+                .expression_attribute_values(
+                    ":updated_at",
+                    AttributeValue::N(crate::clock::now_sec().to_string()),
                 ),
             db::LocationUpdateShape::LastSyncTime { time } => base
                 .update_expression("SET last_successful_member_sync = :last_successful_member_sync")
@@ -2282,9 +2336,13 @@ impl db::Handler for Handler {
                     AttributeValue::N(time.to_string()),
                 ),
             db::LocationUpdateShape::Name { name } => base
-                .update_expression("SET #name = :name")
+                .update_expression("SET #name = :name, updated_at = :updated_at")
                 .expression_attribute_names("#name", "name")
-                .expression_attribute_values(":name", AttributeValue::S(name.to_string())),
+                .expression_attribute_values(":name", AttributeValue::S(name.to_string()))
+                .expression_attribute_values(
+                    ":updated_at",
+                    AttributeValue::N(crate::clock::now_sec().to_string()),
+                ),
         };
 
         let resp = req
@@ -2336,6 +2394,7 @@ impl db::Handler for Handler {
             return Err(db::Error::MutationDisabled);
         }
         let id = new_id();
+        let now = crate::clock::now_sec();
 
         let nitc_group_id_val = nitc_group_id
             .map(|s| AttributeValue::S(s.to_string()))
@@ -2353,6 +2412,8 @@ impl db::Handler for Handler {
             .item("enabled", AttributeValue::Bool(true))
             .item("nitc_group_id", nitc_group_id_val)
             .item("nitc_participant_type", nitc_participant_type_val)
+            .item("created_at", AttributeValue::N(now.to_string()))
+            .item("updated_at", AttributeValue::N(now.to_string()))
             .return_consumed_capacity(ReturnConsumedCapacity::Total)
             .send()
             .await
@@ -2365,6 +2426,8 @@ impl db::Handler for Handler {
             enabled: true,
             nitc_participant_type: nitc_participant_type.map(str::to_string),
             nitc_group_id: nitc_group_id.map(str::to_string),
+            created_at: Some(now),
+            updated_at: Some(now),
         })
     }
 
@@ -2392,13 +2455,17 @@ impl db::Handler for Handler {
             .key("id", AttributeValue::S(id.to_string()))
             .update_expression(
                 "SET #name = :name, enabled = :enabled, \
-                 nitc_group_id = :ngid, nitc_participant_type = :npt",
+                 nitc_group_id = :ngid, nitc_participant_type = :npt, updated_at = :updated_at",
             )
             .expression_attribute_names("#name", "name")
             .expression_attribute_values(":name", AttributeValue::S(name.to_string()))
             .expression_attribute_values(":enabled", AttributeValue::Bool(active))
             .expression_attribute_values(":ngid", nitc_group_id_val)
             .expression_attribute_values(":npt", nitc_participant_type_val)
+            .expression_attribute_values(
+                ":updated_at",
+                AttributeValue::N(crate::clock::now_sec().to_string()),
+            )
             .return_consumed_capacity(ReturnConsumedCapacity::Total)
             .send()
             .await
@@ -2468,6 +2535,7 @@ impl db::Handler for Handler {
         }
 
         let id = new_id();
+        let now = crate::clock::now_sec();
         let date_str = date.format("%Y-%m-%d").to_string();
         let resp = self
             .client
@@ -2485,6 +2553,8 @@ impl db::Handler for Handler {
                 AttributeValue::S(topic_date_key(nitc_group_id, date)),
             )
             .item("v", AttributeValue::N("1".to_string()))
+            .item("created_at", AttributeValue::N(now.to_string()))
+            .item("updated_at", AttributeValue::N(now.to_string()))
             .return_consumed_capacity(ReturnConsumedCapacity::Total)
             .send()
             .await
@@ -2503,6 +2573,8 @@ impl db::Handler for Handler {
             ses_api_nitc_id: None,
             version: 1,
             synced_version: None,
+            created_at: Some(now),
+            updated_at: Some(now),
         })
     }
 
@@ -2628,6 +2700,7 @@ impl db::Handler for Handler {
                 &generated
             }
         };
+        let now = crate::clock::now_sec();
         let tags_value = if nitc_tag_ids.is_empty() {
             AttributeValue::Null(true)
         } else {
@@ -2640,6 +2713,8 @@ impl db::Handler for Handler {
             .item("id", AttributeValue::S(id.to_string()))
             .item("nitc_type", AttributeValue::S(nitc_type.to_string()))
             .item("nitc_tag_ids", tags_value)
+            .item("created_at", AttributeValue::N(now.to_string()))
+            .item("updated_at", AttributeValue::N(now.to_string()))
             .return_consumed_capacity(ReturnConsumedCapacity::Total)
             .send()
             .await
@@ -2653,6 +2728,8 @@ impl db::Handler for Handler {
             id: id.to_string(),
             nitc_type: nitc_type.to_string(),
             nitc_tag_ids: nitc_tag_ids.to_vec(),
+            created_at: Some(now),
+            updated_at: Some(now),
         })
     }
 
@@ -2675,9 +2752,15 @@ impl db::Handler for Handler {
             .update_item()
             .table_name(self.table_name("nitc_group"))
             .key("id", AttributeValue::S(id.to_string()))
-            .update_expression("SET nitc_type = :type, nitc_tag_ids = :tags")
+            .update_expression(
+                "SET nitc_type = :type, nitc_tag_ids = :tags, updated_at = :updated_at",
+            )
             .expression_attribute_values(":type", AttributeValue::S(nitc_type.to_string()))
             .expression_attribute_values(":tags", tags_value)
+            .expression_attribute_values(
+                ":updated_at",
+                AttributeValue::N(crate::clock::now_sec().to_string()),
+            )
             .return_consumed_capacity(ReturnConsumedCapacity::Total)
             .send()
             .await
@@ -3159,10 +3242,7 @@ impl db::Handler for Handler {
             return Err(db::Error::MutationDisabled);
         }
         let id = new_id();
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
+        let now = crate::clock::now_sec();
         self.client
             .put_item()
             .table_name(self.table_name("user_token"))
@@ -3247,10 +3327,7 @@ impl db::Handler for Handler {
         }
         match change {
             db::UserTokenUpdateShape::TouchLastUsed => {
-                let now = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs();
+                let now = crate::clock::now_sec();
                 let new_expires = now + crate::expire::DEFAULT_USER_EXPIRE_S;
                 self.client
                     .update_item()
@@ -3298,10 +3375,7 @@ impl db::Handler for Handler {
         if self.read_only {
             return Err(db::Error::MutationDisabled);
         }
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
+        let now = crate::clock::now_sec();
         self.client
             .put_item()
             .table_name(self.table_name("webauthn_credential"))
@@ -3421,10 +3495,7 @@ impl db::Handler for Handler {
                     })?;
             }
             db::WebauthnCredentialUpdate::TouchLastUsed { passkey_json } => {
-                let now = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs();
+                let now = crate::clock::now_sec();
                 self.client
                     .update_item()
                     .table_name(self.table_name("webauthn_credential"))

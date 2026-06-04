@@ -91,6 +91,8 @@ pub struct User {
     pub location_grants: Vec<String>,
     pub access_time: Option<u64>,
     pub email_config: serde_json::Map<String, serde_json::Value>,
+    pub created_at: Option<u64>,
+    pub updated_at: Option<u64>,
 }
 
 impl HasID for User {
@@ -123,6 +125,8 @@ pub struct Person {
     pub registration_number: Option<String>,
     pub ses_api_person_id: Option<String>,
     pub deleted: Option<u64>,
+    pub created_at: Option<u64>,
+    pub updated_at: Option<u64>,
 }
 
 impl HasID for Person {
@@ -159,6 +163,8 @@ pub struct Session {
     pub config: serde_json::Map<String, serde_json::Value>,
     pub healthcheck_url: Option<String>,
     pub legacy_id: Option<String>,
+    pub created_at: Option<u64>,
+    pub updated_at: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -246,6 +252,8 @@ pub struct Period {
     pub nitc_participant_id: Option<i64>,
     pub nitc_exported_version: Option<u64>,
     pub deleted: Option<u64>,
+    pub created_at: Option<u64>,
+    pub updated_at: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -257,6 +265,8 @@ pub struct NitcEvent {
     pub ses_api_nitc_id: Option<i64>,
     pub version: u64,
     pub synced_version: Option<u64>,
+    pub created_at: Option<u64>,
+    pub updated_at: Option<u64>,
 }
 
 /// NITC topic group configuration: type, tags. Location fields are fetched separately.
@@ -265,6 +275,8 @@ pub struct NitcGroup {
     pub id: String,
     pub nitc_type: String,
     pub nitc_tag_ids: Vec<i32>,
+    pub created_at: Option<u64>,
+    pub updated_at: Option<u64>,
 }
 
 impl HasID for NitcGroup {
@@ -312,6 +324,8 @@ pub struct Location {
     pub nitc_enabled: Option<u64>,
     pub ses_api_headquarters_id: Option<String>,
     pub last_successful_member_sync: Option<u64>,
+    pub created_at: Option<u64>,
+    pub updated_at: Option<u64>,
 }
 
 impl HasID for Location {
@@ -327,6 +341,8 @@ pub struct Category {
     pub enabled: bool,
     pub nitc_participant_type: Option<String>,
     pub nitc_group_id: Option<String>,
+    pub created_at: Option<u64>,
+    pub updated_at: Option<u64>,
 }
 
 impl HasID for Category {

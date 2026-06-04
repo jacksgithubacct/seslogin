@@ -3,7 +3,6 @@ use crate::dynamodb;
 use crate::ses_api::{SesClient, SesPerson};
 use anyhow::{Context, Result, anyhow};
 use std::collections::{HashMap, HashSet};
-use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{info, warn};
 
 const BLOCKED_UNIT_SES_IDS: &[i64] = &[
@@ -559,10 +558,7 @@ pub async fn run(config: SyncConfig) -> Result<RunStats> {
 
         stats.processed_locations += 1;
 
-        let sync_start_time = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
+        let sync_start_time = crate::clock::now_sec();
 
         info!(
             "Syncing location={} name='{}' ses_api_headquarters_id={} dry_run={}",

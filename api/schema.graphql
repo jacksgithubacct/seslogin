@@ -17,6 +17,8 @@ type Category {
 	nitcGroupId: String
 	nitcParticipantType: String
 	nitcGroup: NitcGroup
+	createdAt: Int
+	updatedAt: Int
 }
 
 type CategoryMemberPeriodSummary {
@@ -55,6 +57,8 @@ type Location {
 	nitcEnabled: Int
 	sesApiHeadquartersId: String
 	lastSuccessfulMemberSync: Int
+	createdAt: Int
+	updatedAt: Int
 	people: [Person!]!
 	periods(onlyActive: Boolean, startTime: Int, endTime: Int, after: String, before: String, first: Int, last: Int): PeriodConnection!
 	periodSummaryByMember(startTime: Int!, endTime: Int!, category: ID): [MemberPeriodSummary!]!
@@ -155,6 +159,8 @@ type NitcGroup {
 	id: String!
 	nitcType: String!
 	sesTags: [SesNonIncidentTag!]!
+	createdAt: Int
+	updatedAt: Int
 }
 
 """
@@ -204,6 +210,8 @@ type Period {
 	category: Category
 	startTime: Int!
 	endTime: Int
+	createdAt: Int
+	updatedAt: Int
 	signedInSessionId: ID
 	"""
 	The kiosk session that signed this period in, if recorded. `None` for
@@ -272,6 +280,8 @@ type Person {
 	"""
 	sesApiPersonId: String
 	deleted: Boolean!
+	createdAt: Int
+	updatedAt: Int
 	periods(after: String, before: String, first: Int, last: Int): PeriodConnection!
 	"""
 	The person's most recent period (by start time), or null if they have none.
@@ -374,6 +384,8 @@ type Session {
 	code: String
 	healthcheckUrl: String
 	config: JSON!
+	createdAt: Int
+	updatedAt: Int
 }
 
 type User {
@@ -386,6 +398,8 @@ type User {
 	isDev: Boolean!
 	enabled: Boolean!
 	accessTime: Int
+	createdAt: Int
+	updatedAt: Int
 	emailSummaryLocationIds: [String!]!
 	locationGrantIds: [ID!]!
 	locations: [Location!]!
