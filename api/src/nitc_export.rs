@@ -596,6 +596,9 @@ pub async fn sync_nitc_event<D: db::Handler>(
                         );
                         continue;
                     }
+                    crate::request_metrics::METRICS
+                        .try_with(|m| m.record_registration_lookup())
+                        .ok();
                     let Some(ses_person) = clients
                         .ses
                         .fetch_person_by_registration_number(registration_number)

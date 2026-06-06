@@ -103,9 +103,10 @@ async fn handler(event: LambdaEvent<Value>) -> Result<Value, LambdaError> {
         .await;
 
     tracing::info!(
-        "rru={:.1} wru={:.1}",
+        "rru={:.1} wru={:.1} registration_lookups={}",
         metrics.read_units(),
         metrics.write_units(),
+        metrics.registration_lookups(),
     );
 
     Ok(result?)
