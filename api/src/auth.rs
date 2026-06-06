@@ -132,12 +132,18 @@ async fn fetch_update_session_auth_info<A: App + HasDb + HasSqs>(
     };
     let session = match primary_session {
         Some(s) => s,
-        None => app
-            .db()
-            .get_session_by_legacy_id(&session_id)
-            .await
-            .map_err(|e| classify_db_err("fetch session by legacy_id from db", e))?
-            .ok_or_else(|| AuthError::Permanent("Session not found".into()))?,
+        None => {
+            let legacy = app
+                .db()
+                .get_session_by_legacy_id(&session_id)
+                .await
+                .map_err(|e| classify_db_err("fetch session by legacy_id from db", e))?
+                .ok_or_else(|| AuthError::Permanent("Session not found".into()))?;
+            // Track usage of the deprecated legacy_id auth path so we know when
+            // it's safe to remove.
+            crate::emf::emit_legacy_session_lookup(&session_id);
+            legacy
+        }
     };
 
     // if access time is older than 1 minute ago then update it - helps reduce DB write load
