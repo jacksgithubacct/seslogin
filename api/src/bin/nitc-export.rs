@@ -122,8 +122,8 @@ async fn main() -> Result<()> {
                     nitc_export::PeriodAssignOutcome::AlreadySynced => {
                         println!("period {} → already synced", period_id)
                     }
-                    nitc_export::PeriodAssignOutcome::Skipped => {
-                        println!("period {} → skipped (not NITC-eligible)", period_id)
+                    nitc_export::PeriodAssignOutcome::Skipped(reason) => {
+                        println!("period {} → skipped ({})", period_id, reason)
                     }
                 }
                 return anyhow::Ok(());
@@ -137,6 +137,9 @@ async fn main() -> Result<()> {
                         "event {} → synced https://beacon.ses.nsw.gov.au/nitc/{}",
                         event_id, ses_id
                     ),
+                    nitc_export::EventSyncOutcome::Skipped(reason) => {
+                        println!("event {} → skipped ({})", event_id, reason)
+                    }
                     other => println!("event {} → {:?}", event_id, other),
                 }
                 return anyhow::Ok(());

@@ -26,10 +26,47 @@ pub struct NitcConfig {
 #[derive(Debug, Clone)]
 pub enum PeriodAssignOutcome {
     Assigned(String),
-    /// Period is not NITC-eligible (no category, category/location not NITC-enabled, or open with no participant).
-    Skipped,
+    /// Period is not NITC-eligible. The reason explains which check it failed.
+    Skipped(SkipReason),
     /// Period's nitc_exported_version >= version — already fully exported, nothing to do.
     AlreadySynced,
+}
+
+/// Why a period was not assigned to an NITC event. Used for CLI/log debugging.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SkipReason {
+    /// The period row does not exist (or is deleted).
+    PeriodNotFound,
+    /// The period has no category set.
+    NoCategory,
+    /// The period's category row does not exist.
+    CategoryNotFound,
+    /// The category has no nitc_group_id, so it is not NITC-enabled.
+    CategoryNotNitcEnabled,
+    /// The location is not NITC-enabled (no nitc_enabled cutover set).
+    LocationNotNitcEnabled,
+    /// The location has no ses_api_headquarters_id to export against.
+    LocationNoHeadquartersId,
+    /// The period started before the location's NITC cutover time.
+    BeforeCutover,
+    /// The period is still open and has no participant to clean up.
+    OpenNoParticipant,
+}
+
+impl std::fmt::Display for SkipReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let msg = match self {
+            SkipReason::PeriodNotFound => "period not found",
+            SkipReason::NoCategory => "period has no category",
+            SkipReason::CategoryNotFound => "category not found",
+            SkipReason::CategoryNotNitcEnabled => "category is not NITC-enabled (no nitc_group_id)",
+            SkipReason::LocationNotNitcEnabled => "location is not NITC-enabled",
+            SkipReason::LocationNoHeadquartersId => "location has no ses_api_headquarters_id",
+            SkipReason::BeforeCutover => "period started before the location's NITC cutover",
+            SkipReason::OpenNoParticipant => "period is open with no participant",
+        };
+        f.write_str(msg)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -40,7 +77,30 @@ pub enum EventSyncOutcome {
     /// event was already synced at this version or later — nothing to do.
     AlreadySynced,
     NoLivePeriods,
-    Skipped,
+    /// Event could not be synced. The reason explains which check it failed.
+    Skipped(EventSkipReason),
+}
+
+/// Why a NITC event was not synced to SES. Used for CLI/log debugging.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EventSkipReason {
+    /// The nitc_events row does not exist.
+    EventNotFound,
+    /// The event's location row does not exist.
+    LocationNotFound,
+    /// The event's location is not NITC-enabled.
+    LocationNotNitcEnabled,
+}
+
+impl std::fmt::Display for EventSkipReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let msg = match self {
+            EventSkipReason::EventNotFound => "NITC event not found",
+            EventSkipReason::LocationNotFound => "location not found",
+            EventSkipReason::LocationNotNitcEnabled => "location is not NITC-enabled",
+        };
+        f.write_str(msg)
+    }
 }
 
 /// SES rejects event names longer than this many characters.
@@ -121,11 +181,11 @@ pub async fn assign_period<D: db::Handler>(
         .next()
         .flatten()
     else {
-        return Ok(PeriodAssignOutcome::Skipped);
+        return Ok(PeriodAssignOutcome::Skipped(SkipReason::PeriodNotFound));
     };
 
     let Some(category_id) = &period.category_id else {
-        return Ok(PeriodAssignOutcome::Skipped);
+        return Ok(PeriodAssignOutcome::Skipped(SkipReason::NoCategory));
     };
 
     let Some(category) = clients
@@ -136,11 +196,13 @@ pub async fn assign_period<D: db::Handler>(
         .next()
         .flatten()
     else {
-        return Ok(PeriodAssignOutcome::Skipped);
+        return Ok(PeriodAssignOutcome::Skipped(SkipReason::CategoryNotFound));
     };
 
     let Some(nitc_group_id) = category.nitc_group_id else {
-        return Ok(PeriodAssignOutcome::Skipped);
+        return Ok(PeriodAssignOutcome::Skipped(
+            SkipReason::CategoryNotNitcEnabled,
+        ));
     };
 
     let location = clients
@@ -151,17 +213,21 @@ pub async fn assign_period<D: db::Handler>(
         .next()
         .flatten();
     let Some(nitc_cutover) = location.as_ref().and_then(|l| l.nitc_enabled) else {
-        return Ok(PeriodAssignOutcome::Skipped);
+        return Ok(PeriodAssignOutcome::Skipped(
+            SkipReason::LocationNotNitcEnabled,
+        ));
     };
     if location
         .as_ref()
         .and_then(|l| l.ses_api_headquarters_id.as_ref())
         .is_none()
     {
-        return Ok(PeriodAssignOutcome::Skipped);
+        return Ok(PeriodAssignOutcome::Skipped(
+            SkipReason::LocationNoHeadquartersId,
+        ));
     }
     if period.start_time < nitc_cutover {
-        return Ok(PeriodAssignOutcome::Skipped);
+        return Ok(PeriodAssignOutcome::Skipped(SkipReason::BeforeCutover));
     }
 
     // Skip open periods that have no participant to clean up
@@ -172,7 +238,7 @@ pub async fn assign_period<D: db::Handler>(
                 .set_period_nitc_exported_version(period_id, period.version)
                 .await?;
         }
-        return Ok(PeriodAssignOutcome::Skipped);
+        return Ok(PeriodAssignOutcome::Skipped(SkipReason::OpenNoParticipant));
     }
 
     if !config.force && period.nitc_exported_version >= Some(period.version) {
@@ -395,7 +461,7 @@ pub async fn sync_nitc_event<D: db::Handler>(
 ) -> Result<EventSyncOutcome> {
     let Some(event) = clients.db.get_nitc_event_by_id(event_id).await? else {
         warn!("NITC event {} not found, skipping sync", event_id);
-        return Ok(EventSyncOutcome::Skipped);
+        return Ok(EventSyncOutcome::Skipped(EventSkipReason::EventNotFound));
     };
 
     if expected_version.is_some_and(|v| event.version != v) {
@@ -416,6 +482,17 @@ pub async fn sync_nitc_event<D: db::Handler>(
         .into_iter()
         .flatten()
         .collect();
+    for period in &all_periods {
+        info!(
+            "Period {} (person {}, category {:?}, start {}, end {:?}, deleted {})",
+            period.id,
+            period.person_id,
+            period.category_id,
+            unix_to_sydney_rfc3339(period.start_time),
+            period.end_time.map(unix_to_sydney_rfc3339),
+            period.deleted.is_some()
+        );
+    }
 
     // Batch-fetch persons and categories needed by the periods
     let person_ids: Vec<&str> = all_periods
@@ -469,7 +546,7 @@ pub async fn sync_nitc_event<D: db::Handler>(
             "NITC event {} location {} not found, skipping sync",
             event_id, event.location_id
         );
-        return Ok(EventSyncOutcome::Skipped);
+        return Ok(EventSyncOutcome::Skipped(EventSkipReason::LocationNotFound));
     };
 
     // Only live, ended periods are sent to SES; deleted periods are removed implicitly by
@@ -485,7 +562,9 @@ pub async fn sync_nitc_event<D: db::Handler>(
             "NITC event {} location {} not NITC-enabled, skipping sync",
             event_id, event.location_id
         );
-        return Ok(EventSyncOutcome::Skipped);
+        return Ok(EventSyncOutcome::Skipped(
+            EventSkipReason::LocationNotNitcEnabled,
+        ));
     }
     let ses_hq_id = location
         .ses_api_headquarters_id

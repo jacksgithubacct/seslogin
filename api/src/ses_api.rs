@@ -509,6 +509,10 @@ impl SesClient {
                 body.name
             );
         }
+        info!(
+            "Updating NITC event for headquarters_id={}: {:?}",
+            hq_id, body,
+        );
         self.put_json_retry(&url, body, &format!("update NITC event hq={}", hq_id))
             .await
     }
