@@ -74,10 +74,6 @@ impl db::Handler for Handler {
         Self::unsupported()
     }
 
-    async fn get_session_by_legacy_id(&self, _legacy_id: &str) -> db::Result<Option<Session>> {
-        Self::unsupported()
-    }
-
     async fn wipe_session_code(&self, _id: &str) -> db::Result<()> {
         Self::unsupported()
     }

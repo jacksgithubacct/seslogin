@@ -176,7 +176,6 @@ pub struct Session {
     pub code: Option<String>,
     pub config: serde_json::Map<String, serde_json::Value>,
     pub healthcheck_url: Option<String>,
-    pub legacy_id: Option<String>,
     pub created_at: Option<u64>,
     pub updated_at: Option<u64>,
 }
@@ -471,10 +470,6 @@ pub trait Handler {
         &self,
         code: &str,
     ) -> impl Future<Output = Result<Vec<String>>> + Send;
-    fn get_session_by_legacy_id(
-        &self,
-        legacy_id: &str,
-    ) -> impl Future<Output = Result<Option<Session>>> + Send;
     fn wipe_session_code(&self, id: &str) -> impl Future<Output = Result<()>> + Send;
     fn list_sessions(
         &self,

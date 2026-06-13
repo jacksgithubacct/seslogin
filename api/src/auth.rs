@@ -147,21 +147,8 @@ async fn fetch_update_session_auth_info<A: App + HasDb + HasSqs>(
         Err(db::Error::NotFound(_)) => None,
         Err(e) => return Err(classify_db_err("fetch session from db", e)),
     };
-    let session = match primary_session {
-        Some(s) => s,
-        None => {
-            let legacy = app
-                .db()
-                .get_session_by_legacy_id(&session_id)
-                .await
-                .map_err(|e| classify_db_err("fetch session by legacy_id from db", e))?
-                .ok_or_else(|| AuthError::Permanent("Session not found".into()))?;
-            // Track usage of the deprecated legacy_id auth path so we know when
-            // it's safe to remove.
-            crate::emf::emit_legacy_session_lookup(&session_id);
-            legacy
-        }
-    };
+    let session =
+        primary_session.ok_or_else(|| AuthError::Permanent("Session not found".into()))?;
 
     // Only refresh last_contact if it's older than this window, to reduce DB
     // write load. The admin UI only renders last_contact at minute+ granularity

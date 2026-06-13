@@ -294,7 +294,6 @@ impl TryInto<Session> for Item {
                 }
             },
             healthcheck_url: self.string_field("healthcheck_url")?,
-            legacy_id: self.string_field("legacy_id")?,
             created_at: self.i64_field("created_at")?.map(|i| i as u64),
             updated_at: self.i64_field("updated_at")?.map(|i| i as u64),
         })
@@ -990,61 +989,6 @@ impl db::Handler for Handler {
             .into_iter()
             .map(|item| Item(item).id())
             .collect())
-    }
-
-    async fn get_session_by_legacy_id(&self, legacy_id: &str) -> db::Result<Option<Session>> {
-        let resp = self
-            .client
-            .query()
-            .table_name(self.table_name("session"))
-            .index_name("legacy_id-index")
-            .key_condition_expression("legacy_id = :legacy_id")
-            .expression_attribute_values(":legacy_id", AttributeValue::S(legacy_id.to_string()))
-            .return_consumed_capacity(ReturnConsumedCapacity::Total)
-            .send()
-            .await
-            .map_err(|e| Error::Infrastructure(sdk_err_msg(e)))?;
-        record_capacity(
-            "get_session_by_legacy_id query",
-            resp.consumed_capacity(),
-            CapKind::Read,
-        );
-
-        if resp.count == 1 {
-            let gsi_item = Item(
-                resp.items
-                    .ok_or_else(|| Error::Infrastructure("items missing".to_string()))?
-                    .into_iter()
-                    .next()
-                    .unwrap(),
-            );
-            let id = gsi_item.id();
-            let get_resp = self
-                .client
-                .get_item()
-                .table_name(self.table_name("session"))
-                .key("id", AttributeValue::S(id))
-                .return_consumed_capacity(ReturnConsumedCapacity::Total)
-                .send()
-                .await
-                .map_err(|e| Error::Infrastructure(sdk_err_msg(e)))?;
-            record_capacity(
-                "get_session_by_legacy_id get",
-                get_resp.consumed_capacity(),
-                CapKind::Read,
-            );
-            match get_resp.item {
-                Some(item) if item.contains_key("active") => Ok(Some(Item(item).try_into()?)),
-                _ => Ok(None),
-            }
-        } else if resp.count == 0 {
-            Ok(None)
-        } else {
-            Err(Error::Integrity(format!(
-                "Multiple sessions found with legacy_id {}",
-                legacy_id
-            )))
-        }
     }
 
     async fn wipe_session_code(&self, id: &str) -> db::Result<()> {
@@ -1813,7 +1757,6 @@ impl db::Handler for Handler {
             code: Some(code),
             config: config.clone(),
             healthcheck_url: healthcheck_url.map(str::to_string),
-            legacy_id: None,
             created_at: Some(unix_time),
             updated_at: Some(unix_time),
         })

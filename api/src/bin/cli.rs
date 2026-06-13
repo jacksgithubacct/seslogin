@@ -427,7 +427,6 @@ async fn show_sessions(db: &impl Handler, sessions: &[Session]) {
             ("client_version", opt_str(&s.client_version)),
             ("last_contact", opt_ts(s.last_contact)),
             ("healthcheck_url", opt_str(&s.healthcheck_url)),
-            ("legacy_id", opt_str(&s.legacy_id)),
             (
                 "config",
                 serde_json::to_string(&s.config).unwrap_or_default(),

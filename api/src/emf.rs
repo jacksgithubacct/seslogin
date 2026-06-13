@@ -80,20 +80,6 @@ pub struct EmfApiMetrics<'a> {
     pub wru: f64,
 }
 
-/// Emit a single legacy-session-lookup count as a CloudWatch metric.
-/// Lets us see whether any clients still authenticate via the deprecated
-/// `legacy_id` fallback, so the code path can be safely removed once this
-/// stays at zero.
-pub fn emit_legacy_session_lookup(session_id: &str) {
-    let ts = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis();
-    println!(
-        r#"{{"_aws":{{"Timestamp":{ts},"CloudWatchMetrics":[{{"Namespace":"Seslogin/API","Dimensions":[[]],"Metrics":[{{"Name":"LegacySessionLookupCount","Unit":"Count"}}]}}]}},"SessionId":"{session_id}","LegacySessionLookupCount":1}}"#,
-    );
-}
-
 impl EmfApiMetrics<'_> {
     pub fn emit(&self) {
         let success =
