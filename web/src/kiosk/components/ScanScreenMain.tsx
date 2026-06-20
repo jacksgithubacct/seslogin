@@ -217,7 +217,13 @@ export default function ScanScreenMain(props: {
   }, [focusInput, onFocusInputReady]);
 
   async function handleSubmit(data: FormData) {
-    const memberId = data.get("id") as string;
+    const memberId = ((data.get("id") as string) ?? "").trim();
+    if (memberId === "") {
+      // Ignore empty submissions (e.g. Enter pressed on a blank/whitespace input)
+      // so we never fire scanRegister2 with an empty registration number.
+      focusInput();
+      return;
+    }
     await onSubmit(memberId);
   }
 
