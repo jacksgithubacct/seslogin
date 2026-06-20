@@ -128,6 +128,7 @@ async fn index<H: db::Handler + Send + Sync + 'static>(
         rru: metrics.read_units(),
         wru: metrics.write_units(),
         ddb_calls: metrics.ddb_calls(),
+        auth_error: "",
     }
     .emit();
     response

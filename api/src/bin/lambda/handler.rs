@@ -51,7 +51,7 @@ impl<H: db::Handler + Send + Sync + 'static> Handler<H> {
 
         let auth_opt = match self.try_auth(&headers).await {
             Err(auth::AuthError::Permanent(ref msg)) => {
-                emit_auth_failure_telemetry(401, request_start);
+                emit_auth_failure_telemetry(401, request_start, msg);
                 return error_response(
                     StatusCode::UNAUTHORIZED,
                     graphql_error(format!("Authentication error: {}", msg)),
@@ -59,7 +59,7 @@ impl<H: db::Handler + Send + Sync + 'static> Handler<H> {
             }
             Err(auth::AuthError::Transient(ref msg)) => {
                 tracing::error!("Transient auth error: {}", msg);
-                emit_auth_failure_telemetry(503, request_start);
+                emit_auth_failure_telemetry(503, request_start, msg);
                 return error_response(
                     StatusCode::SERVICE_UNAVAILABLE,
                     graphql_error("Service temporarily unavailable"),
@@ -103,6 +103,7 @@ impl<H: db::Handler + Send + Sync + 'static> Handler<H> {
             rru: metrics.read_units(),
             wru: metrics.write_units(),
             ddb_calls: metrics.ddb_calls(),
+            auth_error: "",
         }
         .emit();
 
@@ -159,7 +160,8 @@ impl<H: db::Handler + Send + Sync + 'static> Handler<H> {
 
 /// Emits request telemetry for an auth failure that short-circuits before GraphQL execution.
 /// `status` is 401 (permanent / unauthenticated) or 503 (transient backend error).
-fn emit_auth_failure_telemetry(status: u16, request_start: Instant) {
+/// `auth_error` is the reason auth failed, recorded in the `api_request` log.
+fn emit_auth_failure_telemetry(status: u16, request_start: Instant, auth_error: &str) {
     RequestTelemetry {
         status,
         operation_type: "unknown",
@@ -173,6 +175,7 @@ fn emit_auth_failure_telemetry(status: u16, request_start: Instant) {
         rru: 0.0,
         wru: 0.0,
         ddb_calls: 0,
+        auth_error,
     }
     .emit();
 }

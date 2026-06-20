@@ -84,6 +84,8 @@ pub struct RequestTelemetry<'a> {
     pub rru: f64,
     pub wru: f64,
     pub ddb_calls: u64,
+    /// For 401 responses, the reason auth failed; empty otherwise.
+    pub auth_error: &'a str,
 }
 
 impl RequestTelemetry<'_> {
@@ -116,6 +118,7 @@ impl RequestTelemetry<'_> {
             rru = self.rru,
             wru = self.wru,
             ddb_calls = self.ddb_calls,
+            auth_error = self.auth_error,
             "api request",
         );
     }
