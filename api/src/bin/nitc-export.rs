@@ -119,6 +119,9 @@ async fn main() -> Result<()> {
                     nitc_export::PeriodAssignOutcome::Assigned(event_id) => {
                         println!("period {} → assigned to event {}", period_id, event_id)
                     }
+                    nitc_export::PeriodAssignOutcome::Detached(event_id) => {
+                        println!("period {} → detached from event {}", period_id, event_id)
+                    }
                     nitc_export::PeriodAssignOutcome::AlreadySynced => {
                         println!("period {} → already synced", period_id)
                     }

@@ -26,6 +26,10 @@ pub struct NitcConfig {
 #[derive(Debug, Clone)]
 pub enum PeriodAssignOutcome {
     Assigned(String),
+    /// Period is no longer NITC-eligible but was still attached to an event, so it was
+    /// detached: the event was re-synced to drop its participant and the period's
+    /// event/participant pointers were cleared. Holds the event ID it was removed from.
+    Detached(String),
     /// Period is not NITC-eligible. The reason explains which check it failed.
     Skipped(SkipReason),
     /// Period's nitc_exported_version >= version — already fully exported, nothing to do.
@@ -164,6 +168,51 @@ fn unix_to_sydney_date(unix: u64) -> chrono::NaiveDate {
 
 // ── Phase 1: Period assignment ────────────────────────────────────────────────
 
+/// Handle a period that is not (or no longer) NITC-eligible. If it is still attached to an
+/// NITC event, detach it: bump and re-sync that event so SES drops the participant (by its
+/// absence from the next PUT), and clear the period's event/participant pointers so it is no
+/// longer listed for the event. Otherwise it is a plain skip with the given reason.
+async fn skip_or_detach<D: db::Handler>(
+    period: &db::Period,
+    reason: SkipReason,
+    config: &NitcConfig,
+    clients: &NitcClients<D>,
+) -> Result<PeriodAssignOutcome> {
+    let Some(old_event_id) = period.nitc_event_id.as_deref() else {
+        return Ok(PeriodAssignOutcome::Skipped(reason));
+    };
+
+    if config.dry_run {
+        info!(
+            "[dry-run] Would detach period {} from event {} (now ineligible: {}) and re-sync the event to remove its participant",
+            period.id, old_event_id, reason
+        );
+        return Ok(PeriodAssignOutcome::Detached(old_event_id.to_string()));
+    }
+
+    info!(
+        "Detaching period {} from event {} (now ineligible: {})",
+        period.id, old_event_id, reason
+    );
+    // Bump + enqueue the event sync first so Phase 2 re-PUTs the participant list without this
+    // period, then clear the period's pointers so it drops off the event's period index. The
+    // event_export is delayed, so the clear lands well before Phase 2 reads the list.
+    let new_version = clients.db.bump_nitc_event_version(old_event_id).await?;
+    sqs_dispatch::enqueue_nitc_event_export(
+        &clients.sqs.client,
+        &clients.sqs.queue_url,
+        old_event_id,
+        new_version,
+    )
+    .await?;
+    clients
+        .db
+        .clear_period_nitc_participant(&period.id, period.version)
+        .await?;
+
+    Ok(PeriodAssignOutcome::Detached(old_event_id.to_string()))
+}
+
 /// Phase 1: assign a period to the correct nitc_events DB row (creating if needed),
 /// bump the event version, and enqueue a delayed event_sync SQS message for each
 /// affected event. Returns Skipped if the period is not NITC-eligible.
@@ -185,7 +234,7 @@ pub async fn assign_period<D: db::Handler>(
     };
 
     let Some(category_id) = &period.category_id else {
-        return Ok(PeriodAssignOutcome::Skipped(SkipReason::NoCategory));
+        return skip_or_detach(&period, SkipReason::NoCategory, config, clients).await;
     };
 
     let Some(category) = clients
@@ -196,13 +245,11 @@ pub async fn assign_period<D: db::Handler>(
         .next()
         .flatten()
     else {
-        return Ok(PeriodAssignOutcome::Skipped(SkipReason::CategoryNotFound));
+        return skip_or_detach(&period, SkipReason::CategoryNotFound, config, clients).await;
     };
 
     let Some(nitc_group_id) = category.nitc_group_id else {
-        return Ok(PeriodAssignOutcome::Skipped(
-            SkipReason::CategoryNotNitcEnabled,
-        ));
+        return skip_or_detach(&period, SkipReason::CategoryNotNitcEnabled, config, clients).await;
     };
 
     let location = clients
@@ -213,21 +260,23 @@ pub async fn assign_period<D: db::Handler>(
         .next()
         .flatten();
     let Some(nitc_cutover) = location.as_ref().and_then(|l| l.nitc_enabled) else {
-        return Ok(PeriodAssignOutcome::Skipped(
-            SkipReason::LocationNotNitcEnabled,
-        ));
+        return skip_or_detach(&period, SkipReason::LocationNotNitcEnabled, config, clients).await;
     };
     if location
         .as_ref()
         .and_then(|l| l.ses_api_headquarters_id.as_ref())
         .is_none()
     {
-        return Ok(PeriodAssignOutcome::Skipped(
+        return skip_or_detach(
+            &period,
             SkipReason::LocationNoHeadquartersId,
-        ));
+            config,
+            clients,
+        )
+        .await;
     }
     if period.start_time < nitc_cutover {
-        return Ok(PeriodAssignOutcome::Skipped(SkipReason::BeforeCutover));
+        return skip_or_detach(&period, SkipReason::BeforeCutover, config, clients).await;
     }
 
     // Skip open periods that have no participant to clean up
