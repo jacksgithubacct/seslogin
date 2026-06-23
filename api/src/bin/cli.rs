@@ -158,6 +158,11 @@ enum PeriodCmd {
         #[arg(long)]
         person: String,
     },
+    /// List period IDs assigned to an NITC event (includes deleted periods with a participant).
+    ListForNitcEvent {
+        #[arg(long)]
+        event: String,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -870,6 +875,12 @@ async fn run(db: &impl Handler, object: Object) -> Result<()> {
                         },
                     )
                     .await?;
+                print_period_table(db, &periods).await;
+            }
+            PeriodCmd::ListForNitcEvent { event } => {
+                let ids = db.list_period_ids_for_nitc_event(&event).await?;
+                let periods: Vec<Period> =
+                    db.get_periods(&ids).await?.into_iter().flatten().collect();
                 print_period_table(db, &periods).await;
             }
         },
