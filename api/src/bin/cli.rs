@@ -5,7 +5,7 @@
 //! the ID in the first column. All access is read-only.
 
 use anyhow::{Result, anyhow};
-use chrono::{DateTime, Local};
+use chrono::{DateTime, Local, NaiveDate};
 use clap::{Parser, Subcommand};
 use seslogin::db::{
     Category, Handler, ListLocationsFilter, ListPeriodsPage, ListSessionsQuery, Location, Period,
@@ -204,6 +204,16 @@ enum NitcTagCmd {
 enum NitcEventCmd {
     /// Show one or more NITC events by ID.
     Get { ids: Vec<String> },
+    /// Look up the NITC event for a (location, group, date).
+    ForDay {
+        #[arg(long)]
+        location: String,
+        #[arg(long)]
+        group: String,
+        /// Event date in YYYY-MM-DD.
+        #[arg(long)]
+        date: NaiveDate,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -570,6 +580,35 @@ async fn show_users(db: &impl Handler, users: &[User]) {
             ),
             ("created_at", fmt_ts(u.created_at)),
             ("updated_at", fmt_ts(u.updated_at)),
+        ]);
+    }
+}
+
+async fn show_nitc_events(db: &impl Handler, events: &[seslogin::db::NitcEvent]) {
+    let loc_ids: Vec<String> = events.iter().map(|e| e.location_id.clone()).collect();
+    let locs = location_names(db, &loc_ids).await;
+    for (i, e) in events.iter().enumerate() {
+        if i > 0 {
+            println!("{DIVIDER}");
+        }
+        print_detail(&[
+            ("id", e.id.clone()),
+            (
+                "location_id",
+                decorate(&e.location_id, locs.get(&e.location_id)),
+            ),
+            ("nitc_group_id", e.nitc_group_id.clone()),
+            ("event_date", e.event_date.to_string()),
+            (
+                "ses_api_nitc_id",
+                e.ses_api_nitc_id
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "-".to_string()),
+            ),
+            ("version", e.version.to_string()),
+            ("synced_version", opt_num(e.synced_version)),
+            ("created_at", opt_ts(e.created_at)),
+            ("updated_at", opt_ts(e.updated_at)),
         ]);
     }
 }
@@ -1042,33 +1081,18 @@ async fn run(db: &impl Handler, object: Object) -> Result<()> {
                         eprintln!("not found: {}", id);
                     }
                 }
-                let loc_ids: Vec<String> = events.iter().map(|e| e.location_id.clone()).collect();
-                let locs = location_names(db, &loc_ids).await;
-                for (i, e) in events.iter().enumerate() {
-                    if i > 0 {
-                        println!("{DIVIDER}");
-                    }
-                    print_detail(&[
-                        ("id", e.id.clone()),
-                        (
-                            "location_id",
-                            decorate(&e.location_id, locs.get(&e.location_id)),
-                        ),
-                        ("nitc_group_id", e.nitc_group_id.clone()),
-                        ("event_date", e.event_date.to_string()),
-                        (
-                            "ses_api_nitc_id",
-                            e.ses_api_nitc_id
-                                .map(|v| v.to_string())
-                                .unwrap_or_else(|| "-".to_string()),
-                        ),
-                        ("version", e.version.to_string()),
-                        ("synced_version", opt_num(e.synced_version)),
-                        ("created_at", opt_ts(e.created_at)),
-                        ("updated_at", opt_ts(e.updated_at)),
-                    ]);
-                }
+                show_nitc_events(db, &events).await;
             }
+            NitcEventCmd::ForDay {
+                location,
+                group,
+                date,
+            } => match db.get_nitc_event_for_day(&location, &group, date).await? {
+                Some(event) => show_nitc_events(db, std::slice::from_ref(&event)).await,
+                None => {
+                    println!("No NITC event for location {location}, group {group}, date {date}")
+                }
+            },
         },
 
         Object::ActivitySummary { cmd } => match cmd {
