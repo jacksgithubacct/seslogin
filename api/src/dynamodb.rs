@@ -540,6 +540,16 @@ fn topic_date_key(nitc_group_id: &str, date: chrono::NaiveDate) -> String {
     format!("{}#{}", nitc_group_id, date.format("%Y-%m-%d"))
 }
 
+/// Deterministic primary key for a nitc_event, derived from its dedup tuple:
+/// "{location_id}#{nitc_group_id}#{event_date}" e.g. "loc7#42#2026-05-01".
+/// Using a deterministic id lets `get_or_create_nitc_event_for_day` create with a
+/// conditional put so concurrent callers collide on the base-table PK (which is
+/// strongly consistent) rather than racing the eventually-consistent GSI. Cannot
+/// collide with the 12-char nanoid ids used elsewhere because it contains '#'.
+fn nitc_event_key(location_id: &str, nitc_group_id: &str, date: chrono::NaiveDate) -> String {
+    format!("{}#{}", location_id, topic_date_key(nitc_group_id, date))
+}
+
 #[derive(Debug)]
 pub struct Handler {
     table_prefix: String,
@@ -2442,13 +2452,16 @@ impl db::Handler for Handler {
             return Ok(existing);
         }
 
-        let id = new_id();
+        // Deterministic id so concurrent creates collide on the base-table PK
+        // (strongly consistent) instead of racing the eventually-consistent GSI read above.
+        let id = nitc_event_key(location_id, nitc_group_id, date);
         let now = crate::clock::now_sec();
         let date_str = date.format("%Y-%m-%d").to_string();
         let resp = self
             .client
             .put_item()
             .table_name(self.table_name("nitc_event"))
+            .condition_expression("attribute_not_exists(id)")
             .item("id", AttributeValue::S(id.clone()))
             .item("location_id", AttributeValue::S(location_id.to_string()))
             .item(
@@ -2465,8 +2478,26 @@ impl db::Handler for Handler {
             .item("updated_at", AttributeValue::N(now.to_string()))
             .return_consumed_capacity(ReturnConsumedCapacity::Total)
             .send()
-            .await
-            .map_err(|e| Error::Infrastructure(sdk_err_msg(e)))?;
+            .await;
+
+        let resp = match resp {
+            Ok(resp) => resp,
+            Err(e) => {
+                // A concurrent caller won the race and created the same deterministic id.
+                // Read it back by id (strongly consistent) and return the winner.
+                if let SdkError::ServiceError(ref se) = e
+                    && se.err().is_conditional_check_failed_exception()
+                {
+                    return self.get_nitc_event_by_id(&id).await?.ok_or_else(|| {
+                        db::Error::Infrastructure(format!(
+                            "nitc_event {} vanished after conditional-put conflict",
+                            id
+                        ))
+                    });
+                }
+                return Err(Error::Infrastructure(sdk_err_msg(e)));
+            }
+        };
         record_capacity(
             "create_nitc_event",
             resp.consumed_capacity(),
@@ -3502,5 +3533,39 @@ impl db::Handler for Handler {
             .await
             .map_err(|e| Error::Infrastructure(sdk_err_msg(e)))?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{nitc_event_key, topic_date_key};
+    use chrono::NaiveDate;
+
+    #[test]
+    fn topic_date_key_format() {
+        let date = NaiveDate::from_ymd_opt(2026, 5, 1).unwrap();
+        assert_eq!(topic_date_key("42", date), "42#2026-05-01");
+    }
+
+    #[test]
+    fn nitc_event_key_is_deterministic_and_well_formed() {
+        let date = NaiveDate::from_ymd_opt(2026, 5, 1).unwrap();
+        let key = nitc_event_key("loc7", "42", date);
+        assert_eq!(key, "loc7#42#2026-05-01");
+        // Same tuple always yields the same key — this is what lets the conditional
+        // put dedup concurrent creates.
+        assert_eq!(key, nitc_event_key("loc7", "42", date));
+        // Contains '#', so it can never collide with a 12-char nanoid id.
+        assert!(key.contains('#'));
+    }
+
+    #[test]
+    fn nitc_event_key_distinguishes_tuples() {
+        let date = NaiveDate::from_ymd_opt(2026, 5, 1).unwrap();
+        let other_date = NaiveDate::from_ymd_opt(2026, 5, 2).unwrap();
+        let base = nitc_event_key("loc7", "42", date);
+        assert_ne!(base, nitc_event_key("loc8", "42", date));
+        assert_ne!(base, nitc_event_key("loc7", "43", date));
+        assert_ne!(base, nitc_event_key("loc7", "42", other_date));
     }
 }
