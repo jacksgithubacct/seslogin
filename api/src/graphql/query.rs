@@ -1469,6 +1469,20 @@ impl<A: App + HasDb + Send + Sync + 'static> QueryRoot<A> {
             return Err(anyhow!("User ID cannot be empty"));
         }
 
+        // Non-super users may only query their own record. Sessions and API
+        // tokens have no associated user record, so they may not query users.
+        match auth {
+            Some(AuthInfo::User { id, is_super, .. }) => {
+                if !is_super && *id != user_id {
+                    return Err(anyhow!("Not authorized to query other users"));
+                }
+            }
+            Some(AuthInfo::Session { .. }) | Some(AuthInfo::ApiToken { .. }) => {
+                return Err(anyhow!("Not authorized to query users"));
+            }
+            None => return Err(anyhow!("Cannot query users if not logged in")),
+        }
+
         let loader = ctx.data_unchecked::<DataLoader<DatabaseLoader<A>>>();
         let rec = loader
             .load_one(UserId(ID(user_id.clone())))
