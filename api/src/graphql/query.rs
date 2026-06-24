@@ -1445,7 +1445,7 @@ fn make_ses_client() -> Result<ses_api::SesClient> {
 
 #[Object]
 impl<A: App + HasDb + Send + Sync + 'static> QueryRoot<A> {
-    #[graphql(guard = "AuthGuard::new(AuthRequirement::UserOrSession)")]
+    #[graphql(guard = "AuthGuard::new(AuthRequirement::Authenticated)")]
     async fn user(
         &self,
         ctx: &Context<'_>,
@@ -1494,7 +1494,7 @@ impl<A: App + HasDb + Send + Sync + 'static> QueryRoot<A> {
         Ok(rec)
     }
 
-    #[graphql(guard = "AuthGuard::new(AuthRequirement::UserOrSession)")]
+    #[graphql(guard = "AuthGuard::new(AuthRequirement::Authenticated)")]
     async fn location(
         &self,
         ctx: &Context<'_>,
@@ -1515,7 +1515,7 @@ impl<A: App + HasDb + Send + Sync + 'static> QueryRoot<A> {
         Ok(rec)
     }
 
-    #[graphql(guard = "AuthGuard::new(AuthRequirement::UserOrSession)")]
+    #[graphql(guard = "AuthGuard::new(AuthRequirement::Authenticated)")]
     async fn person(
         &self,
         ctx: &Context<'_>,
@@ -1536,7 +1536,7 @@ impl<A: App + HasDb + Send + Sync + 'static> QueryRoot<A> {
         Ok(rec)
     }
 
-    #[graphql(guard = "AuthGuard::new(AuthRequirement::UserOrSession)")]
+    #[graphql(guard = "AuthGuard::new(AuthRequirement::Authenticated)")]
     async fn period(
         &self,
         ctx: &Context<'_>,
@@ -1558,7 +1558,7 @@ impl<A: App + HasDb + Send + Sync + 'static> QueryRoot<A> {
         Ok(Period::new(rec))
     }
 
-    #[graphql(guard = "AuthGuard::new(AuthRequirement::UserOrSession)")]
+    #[graphql(guard = "AuthGuard::new(AuthRequirement::Authenticated)")]
     async fn session(
         &self,
         ctx: &Context<'_>,
@@ -1605,7 +1605,7 @@ impl<A: App + HasDb + Send + Sync + 'static> QueryRoot<A> {
         auth::issue_token_for_session_id(&*app, session_id)
     }
 
-    #[graphql(guard = "AuthGuard::new(AuthRequirement::UserOrSession)")]
+    #[graphql(guard = "AuthGuard::new(AuthRequirement::Authenticated)")]
     async fn category(
         &self,
         ctx: &Context<'_>,
@@ -1642,7 +1642,7 @@ impl<A: App + HasDb + Send + Sync + 'static> QueryRoot<A> {
         Ok(items.into_iter().map(|rec| User::new(rec)).collect())
     }
 
-    #[graphql(guard = "AuthGuard::new(AuthRequirement::UserOrSession)")]
+    #[graphql(guard = "AuthGuard::new(AuthRequirement::Authenticated)")]
     async fn categories(&self, ctx: &Context<'_>) -> Result<Vec<Category<A>>> {
         let app = ctx.data_unchecked::<Arc<A>>();
         let items = app.db().list_categories().await?;

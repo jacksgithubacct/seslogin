@@ -8,7 +8,8 @@ use crate::auth::AuthInfo;
 #[derive(Eq, PartialEq, Copy, Clone)]
 pub(crate) enum AuthRequirement {
     Session,
-    UserOrSession,
+    /// Any authenticated principal: user, session, or API token.
+    Authenticated,
     User,
     SuperUser,
 }
@@ -39,11 +40,11 @@ impl Guard for AuthGuard {
                     Err("Must provide session token".into())
                 }
             }
-            AuthRequirement::UserOrSession => {
+            AuthRequirement::Authenticated => {
                 if auth.is_some() {
                     Ok(())
                 } else {
-                    Err("Must provide user or session token".into())
+                    Err("Must be authenticated".into())
                 }
             }
             AuthRequirement::User => {
