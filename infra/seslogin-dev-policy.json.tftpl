@@ -208,6 +208,31 @@
       "Resource": "*"
     },
     {
+      "Sid": "Backup",
+      "Effect": "Allow",
+      "Action": ["backup:*", "backup-storage:MountCapsule"],
+      "Resource": "*"
+    },
+    {
+      "Sid": "BackupKMS",
+      "Effect": "Allow",
+      "Action": [
+        "kms:CreateGrant",
+        "kms:DescribeKey",
+        "kms:GenerateDataKey",
+        "kms:Decrypt"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "kms:ViaService": [
+            "backup.ap-southeast-2.amazonaws.com",
+            "backup.ap-southeast-4.amazonaws.com"
+          ]
+        }
+      }
+    },
+    {
       "Sid": "SQSList",
       "Effect": "Allow",
       "Action": ["sqs:ListQueues"],

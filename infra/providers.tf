@@ -3,3 +3,10 @@ provider "aws" {
   region  = "us-east-1"
   profile = "seslogin"
 }
+
+# Melbourne — cross-region copy target for DynamoDB backups (see backup.tf).
+provider "aws" {
+  alias   = "melbourne"
+  region  = "ap-southeast-4"
+  profile = "seslogin"
+}
