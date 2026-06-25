@@ -763,13 +763,8 @@ impl db::Handler for Handler {
         }
         let id = new_id();
         let now = crate::clock::now_sec();
-        let av_location_grants = if location_grants.is_empty() {
-            AttributeValue::Null(true)
-        } else {
-            AttributeValue::Ss(location_grants.clone())
-        };
 
-        let resp = self
+        let mut put = self
             .client
             .put_item()
             .table_name(self.table_name("user"))
@@ -778,9 +773,20 @@ impl db::Handler for Handler {
             .item("super", AttributeValue::Bool(is_super))
             .item("created_at", AttributeValue::N(now.to_string()))
             .item("updated_at", AttributeValue::N(now.to_string()))
-            .item("location_grants", av_location_grants)
             .item("enabled", AttributeValue::N("1".to_string()))
-            .return_consumed_capacity(ReturnConsumedCapacity::Total)
+            .return_consumed_capacity(ReturnConsumedCapacity::Total);
+
+        // A String Set can't be empty, so omit the attribute entirely when there
+        // are no grants rather than storing Null (see the omit-over-Null note in
+        // CLAUDE.md).
+        if !location_grants.is_empty() {
+            put = put.item(
+                "location_grants",
+                AttributeValue::Ss(location_grants.clone()),
+            );
+        }
+
+        let resp = put
             .send()
             .await
             .map_err(|e| Error::Infrastructure(sdk_err_msg(e)))?;
@@ -812,13 +818,13 @@ impl db::Handler for Handler {
                 enabled,
                 location_grants,
             } => {
-                let location_grants = if location_grants.is_empty() {
-                    AttributeValue::Null(true)
-                } else {
-                    AttributeValue::Ss(location_grants)
-                };
-                // `enabled` is stored sparsely: N:1 when enabled, attribute removed
-                // when disabled (so it can back a sparse GSI later).
+                let mut set_clauses = vec![
+                    "email = :email",
+                    "#super = :super",
+                    "dev = :dev",
+                    "updated_at = :updated_at",
+                ];
+                let mut remove_clauses = Vec::new();
                 let mut builder = self
                     .client
                     .update_item()
@@ -829,23 +835,41 @@ impl db::Handler for Handler {
                     .expression_attribute_values(":email", AttributeValue::S(email.to_string()))
                     .expression_attribute_values(":super", AttributeValue::Bool(is_super))
                     .expression_attribute_values(":dev", AttributeValue::Bool(is_dev))
-                    .expression_attribute_values(":location_grants", location_grants)
                     .expression_attribute_values(
                         ":updated_at",
                         AttributeValue::N(crate::clock::now_sec().to_string()),
                     );
 
-                if enabled {
-                    builder = builder
-                        .update_expression(
-                            "SET email = :email, #super = :super, dev = :dev, location_grants = :location_grants, enabled = :enabled, updated_at = :updated_at",
-                        )
-                        .expression_attribute_values(":enabled", AttributeValue::N("1".to_string()));
+                // A String Set can't be empty, so omit/REMOVE the attribute when
+                // there are no grants rather than storing Null (see the
+                // omit-over-Null note in CLAUDE.md).
+                if location_grants.is_empty() {
+                    remove_clauses.push("location_grants");
                 } else {
-                    builder = builder.update_expression(
-                        "SET email = :email, #super = :super, dev = :dev, location_grants = :location_grants, updated_at = :updated_at REMOVE enabled",
+                    set_clauses.push("location_grants = :location_grants");
+                    builder = builder.expression_attribute_values(
+                        ":location_grants",
+                        AttributeValue::Ss(location_grants),
                     );
                 }
+
+                // `enabled` is stored sparsely: N:1 when enabled, attribute removed
+                // when disabled (so it can back a sparse GSI later).
+                if enabled {
+                    set_clauses.push("enabled = :enabled");
+                    builder = builder.expression_attribute_values(
+                        ":enabled",
+                        AttributeValue::N("1".to_string()),
+                    );
+                } else {
+                    remove_clauses.push("enabled");
+                }
+
+                let mut update_expr = format!("SET {}", set_clauses.join(", "));
+                if !remove_clauses.is_empty() {
+                    update_expr.push_str(&format!(" REMOVE {}", remove_clauses.join(", ")));
+                }
+                builder = builder.update_expression(update_expr);
 
                 let resp = builder
                     .return_consumed_capacity(ReturnConsumedCapacity::Total)
@@ -2660,21 +2684,28 @@ impl db::Handler for Handler {
             }
         };
         let now = crate::clock::now_sec();
-        let tags_value = if nitc_tag_ids.is_empty() {
-            AttributeValue::Null(true)
-        } else {
-            AttributeValue::Ss(nitc_tag_ids.iter().map(|i| i.to_string()).collect())
-        };
-        let resp = self
+
+        let mut put = self
             .client
             .put_item()
             .table_name(self.table_name("nitc_group"))
             .item("id", AttributeValue::S(id.to_string()))
             .item("nitc_type", AttributeValue::S(nitc_type.to_string()))
-            .item("nitc_tag_ids", tags_value)
             .item("created_at", AttributeValue::N(now.to_string()))
             .item("updated_at", AttributeValue::N(now.to_string()))
-            .return_consumed_capacity(ReturnConsumedCapacity::Total)
+            .return_consumed_capacity(ReturnConsumedCapacity::Total);
+
+        // A String Set can't be empty, so omit the attribute entirely when there
+        // are no tags rather than storing Null (see the omit-over-Null note in
+        // CLAUDE.md).
+        if !nitc_tag_ids.is_empty() {
+            put = put.item(
+                "nitc_tag_ids",
+                AttributeValue::Ss(nitc_tag_ids.iter().map(|i| i.to_string()).collect()),
+            );
+        }
+
+        let resp = put
             .send()
             .await
             .map_err(|e| Error::Infrastructure(sdk_err_msg(e)))?;
@@ -2701,25 +2732,33 @@ impl db::Handler for Handler {
         if self.read_only {
             return Err(db::Error::MutationDisabled);
         }
-        let tags_value = if nitc_tag_ids.is_empty() {
-            AttributeValue::Null(true)
-        } else {
-            AttributeValue::Ss(nitc_tag_ids.iter().map(|i| i.to_string()).collect())
-        };
-        let resp = self
+        // A String Set can't be empty, so SET the attribute when there are tags,
+        // otherwise REMOVE it rather than storing Null (see the omit-over-Null
+        // note in CLAUDE.md).
+        let mut update_expr = String::from("SET nitc_type = :type, updated_at = :updated_at");
+        let mut builder = self
             .client
             .update_item()
             .table_name(self.table_name("nitc_group"))
             .key("id", AttributeValue::S(id.to_string()))
-            .update_expression(
-                "SET nitc_type = :type, nitc_tag_ids = :tags, updated_at = :updated_at",
-            )
             .expression_attribute_values(":type", AttributeValue::S(nitc_type.to_string()))
-            .expression_attribute_values(":tags", tags_value)
             .expression_attribute_values(
                 ":updated_at",
                 AttributeValue::N(crate::clock::now_sec().to_string()),
-            )
+            );
+
+        if nitc_tag_ids.is_empty() {
+            update_expr.push_str(" REMOVE nitc_tag_ids");
+        } else {
+            update_expr.push_str(", nitc_tag_ids = :tags");
+            builder = builder.expression_attribute_values(
+                ":tags",
+                AttributeValue::Ss(nitc_tag_ids.iter().map(|i| i.to_string()).collect()),
+            );
+        }
+
+        let resp = builder
+            .update_expression(update_expr)
             .return_consumed_capacity(ReturnConsumedCapacity::Total)
             .send()
             .await

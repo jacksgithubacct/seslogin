@@ -100,6 +100,8 @@ The policy ARN is in `.env.secret` as `SESLOGIN_TERRAFORM_POLICY_ARN`. The scrip
 
 **Database abstraction**: `api/src/db.rs` defines traits; `api/src/dynamodb.rs` is the DynamoDB implementation. A `mockdb` implementation exists for tests.
 
+> **Optional attributes: omit, don't write `Null`.** When an optional field is absent, leave the attribute off the item entirely — on `put_item` skip the `.item(...)` call; on `update_item` put it in a `REMOVE` clause rather than `SET`ting it to `AttributeValue::Null`. This is mandatory for any attribute that backs a GSI key (DynamoDB rejects a `Null` GSI key with a `ValidationException` — this was the cause of the category-creation bug) and is also required for String/Number Sets (which cannot be stored empty). Apply it uniformly to all optional attributes for consistency; hydration in `dynamodb.rs` already treats a missing attribute and `Null` identically.
+
 **Auth**: `api/src/auth.rs` — token verification dispatches on prefix:
 1. API tokens (`slgn_` prefix) — opaque hashed secrets for programmatic access
 2. User tokens (`slu_` prefix) — opaque hashed secrets issued via email-code auth
