@@ -13,7 +13,7 @@ resource "aws_route53_record" "preprod_cert_validation" {
       record = dvo.resource_record_value
     }
   }
-  zone_id = data.aws_route53_zone.seslogin.zone_id
+  zone_id = aws_route53_zone.seslogin.zone_id
   name    = each.value.name
   type    = each.value.type
   ttl     = 300

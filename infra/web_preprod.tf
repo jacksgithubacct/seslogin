@@ -1,5 +1,5 @@
 resource "aws_s3_bucket" "preprod_web" {
-  bucket = "preprod.seslogin.com"
+  bucket = "seslogin-preprod-web-641079927221"
 }
 
 resource "aws_s3_bucket_public_access_block" "preprod_web" {
@@ -26,7 +26,7 @@ resource "aws_s3_bucket_policy" "preprod_web" {
       Effect    = "Allow"
       Principal = { Service = "cloudfront.amazonaws.com" }
       Action    = "s3:GetObject"
-      Resource  = "arn:aws:s3:::preprod.seslogin.com/*"
+      Resource  = "${aws_s3_bucket.preprod_web.arn}/*"
       Condition = { StringEquals = {
         "AWS:SourceArn" = aws_cloudfront_distribution.preprod.arn
       } }
@@ -98,24 +98,4 @@ resource "aws_cloudfront_distribution" "preprod" {
   }
 }
 
-resource "aws_route53_record" "preprod_a" {
-  zone_id = data.aws_route53_zone.seslogin.zone_id
-  name    = "preprod.seslogin.com"
-  type    = "A"
-  alias {
-    name                   = aws_cloudfront_distribution.preprod.domain_name
-    zone_id                = aws_cloudfront_distribution.preprod.hosted_zone_id
-    evaluate_target_health = false
-  }
-}
-
-resource "aws_route53_record" "preprod_aaaa" {
-  zone_id = data.aws_route53_zone.seslogin.zone_id
-  name    = "preprod.seslogin.com"
-  type    = "AAAA"
-  alias {
-    name                   = aws_cloudfront_distribution.preprod.domain_name
-    zone_id                = aws_cloudfront_distribution.preprod.hosted_zone_id
-    evaluate_target_health = false
-  }
-}
+# App DNS alias records (preprod.seslogin.com) are centralized in route53.tf.

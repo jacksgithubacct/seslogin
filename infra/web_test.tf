@@ -1,5 +1,5 @@
 resource "aws_s3_bucket" "test_web" {
-  bucket = "test.seslogin.com"
+  bucket = "seslogin-test-web-641079927221"
 }
 
 resource "aws_s3_bucket_public_access_block" "test_web" {
@@ -26,7 +26,7 @@ resource "aws_s3_bucket_policy" "test_web" {
       Effect    = "Allow"
       Principal = { Service = "cloudfront.amazonaws.com" }
       Action    = "s3:GetObject"
-      Resource  = "arn:aws:s3:::test.seslogin.com/*"
+      Resource  = "${aws_s3_bucket.test_web.arn}/*"
       Condition = { StringEquals = {
         "AWS:SourceArn" = aws_cloudfront_distribution.test.arn
       } }
@@ -98,16 +98,4 @@ resource "aws_cloudfront_distribution" "test" {
   }
 }
 
-# Replace existing placeholder CNAME (test.seslogin.com → seslogin.com) with CloudFront A alias.
-# Before running terraform apply for Part B, import the existing CNAME:
-#   terraform -chdir=infra import aws_route53_record.test Z2X4360EUGI76W_test.seslogin.com._CNAME
-resource "aws_route53_record" "test" {
-  zone_id = data.aws_route53_zone.seslogin.zone_id
-  name    = "test.seslogin.com"
-  type    = "A"
-  alias {
-    name                   = aws_cloudfront_distribution.test.domain_name
-    zone_id                = aws_cloudfront_distribution.test.hosted_zone_id
-    evaluate_target_health = false
-  }
-}
+# App DNS alias record (test.seslogin.com) is centralized in route53.tf.

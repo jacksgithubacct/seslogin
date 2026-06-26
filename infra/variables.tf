@@ -20,6 +20,22 @@ variable "aws_account_id" {
   type        = string
 }
 
+variable "aws_profile" {
+  description = "AWS CLI/SSO profile Terraform uses for all providers"
+  type        = string
+  default     = "seslogin-new"
+}
+
+# Background workers (member sync, dispatcher, checker, nitc-export, healthcheck,
+# activity-summary, location-sync) via their EventBridge schedules + SQS event
+# source mappings. Set false to pause all background processing; the 3 API
+# servers are unaffected.
+variable "background_jobs_enabled" {
+  description = "Enable the worker lambdas' schedules + SQS triggers."
+  type        = bool
+  default     = true
+}
+
 variable "jwt_secret_test" {
   description = "JWT signing secret for the test environment"
   type        = string
@@ -56,7 +72,3 @@ variable "db_prefix_test" {
   default     = "seslogin_test"
 }
 
-variable "seslogin_terraform_policy_arn" {
-  description = "ARN of the seslogin-terraform IAM policy (managed outside Terraform — see SESLOGIN_TERRAFORM_POLICY_ARN in .env.secret)"
-  type        = string
-}

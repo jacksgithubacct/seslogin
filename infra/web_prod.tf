@@ -1,5 +1,5 @@
 resource "aws_s3_bucket" "prod_web" {
-  bucket = "new.seslogin.com"
+  bucket = "seslogin-prod-web-641079927221"
 }
 
 resource "aws_s3_bucket_public_access_block" "prod_web" {
@@ -26,7 +26,7 @@ resource "aws_s3_bucket_policy" "prod_web" {
       Effect    = "Allow"
       Principal = { Service = "cloudfront.amazonaws.com" }
       Action    = "s3:GetObject"
-      Resource  = "arn:aws:s3:::new.seslogin.com/*"
+      Resource  = "${aws_s3_bucket.prod_web.arn}/*"
       Condition = { StringEquals = {
         "AWS:SourceArn" = aws_cloudfront_distribution.prod.arn
       } }
@@ -92,7 +92,7 @@ resource "aws_cloudfront_distribution" "prod" {
   }
 
   viewer_certificate {
-    acm_certificate_arn      = aws_acm_certificate.prod.arn
+    acm_certificate_arn      = aws_acm_certificate_validation.prod.certificate_arn
     ssl_support_method       = "sni-only"
     minimum_protocol_version = "TLSv1.2_2021"
   }
