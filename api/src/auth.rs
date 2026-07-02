@@ -161,6 +161,13 @@ async fn fetch_update_session_auth_info<A: App + HasDb + HasSqs>(
     let session =
         primary_session.ok_or_else(|| AuthError::Permanent("Session not found".into()))?;
 
+    // A soft-deleted session (the `active` marker removed) must not keep working
+    // just because it still holds a valid 14-day JWT. Reject it so deleting a kiosk
+    // signs it out on its next request.
+    if !session.active {
+        return Err(AuthError::Permanent("Session not found".into()));
+    }
+
     // Only refresh last_contact if it's older than this window, to reduce DB
     // write load. The admin UI only renders last_contact at minute+ granularity
     // (the "online" status dot uses a 10-minute green band), so finer precision
