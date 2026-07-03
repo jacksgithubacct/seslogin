@@ -12,6 +12,7 @@ use seslogin::db::{
     PeriodCursor, Person, Session, User,
 };
 use seslogin::dynamodb;
+use seslogin::jwt::{ExpirePolicy, Key};
 use seslogin::request_metrics::{self, RequestMetrics};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -84,6 +85,31 @@ enum Object {
     ActivitySummary {
         #[command(subcommand)]
         cmd: ActivitySummaryCmd,
+    },
+    /// Generate a signed JWT for a session or user (does not touch the DB).
+    Jwt {
+        /// JWT secret (overrides JWT_SECRET env var).
+        #[arg(long)]
+        jwt_secret: Option<String>,
+        /// Override JWT expiry in seconds.
+        #[arg(long)]
+        expire_s: Option<u64>,
+        #[command(subcommand)]
+        cmd: JwtCmd,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum JwtCmd {
+    /// Generate a JWT for a session (default expiry: 14 days).
+    Session {
+        /// The session ID to embed in the JWT.
+        session_id: String,
+    },
+    /// Generate a JWT for a user (default expiry: 1 hour).
+    User {
+        /// The user ID to embed in the JWT.
+        user_id: String,
     },
 }
 
@@ -723,6 +749,16 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
 
+    // JWT generation is self-contained and needs no DB — handle it before requiring DB_PREFIX.
+    if let Object::Jwt {
+        jwt_secret,
+        expire_s,
+        cmd,
+    } = &cli.object
+    {
+        return run_jwt(jwt_secret.clone(), *expire_s, cmd);
+    }
+
     let db_prefix = cli
         .db_prefix
         .clone()
@@ -741,6 +777,32 @@ async fn main() -> Result<()> {
         metrics.read_units(),
         metrics.write_units(),
     );
+
+    Ok(())
+}
+
+/// Generate and print a signed JWT for a session or user. Does not touch the DB.
+fn run_jwt(jwt_secret: Option<String>, expire_s: Option<u64>, cmd: &JwtCmd) -> Result<()> {
+    let secret = jwt_secret
+        .or_else(|| std::env::var("JWT_SECRET").ok())
+        .ok_or_else(|| anyhow!("JWT_SECRET is required (flag or env var)"))?;
+
+    let key = Key::new(&secret, None, None)?;
+
+    let expire_policy = match expire_s {
+        Some(s) => ExpirePolicy::TimeSec(s),
+        None => match cmd {
+            JwtCmd::Session { .. } => ExpirePolicy::SessionDefault,
+            JwtCmd::User { .. } => ExpirePolicy::UserDefault,
+        },
+    };
+
+    let token = match cmd {
+        JwtCmd::Session { session_id } => key.make_session_jwt(session_id, expire_policy)?,
+        JwtCmd::User { user_id } => key.make_user_jwt(user_id, expire_policy)?,
+    };
+
+    println!("{token}");
 
     Ok(())
 }
@@ -1292,6 +1354,9 @@ async fn run(db: &impl Handler, object: Object) -> Result<()> {
                 list_activity_summary_subscriptions(db).await?;
             }
         },
+
+        // Handled in `main` before the DB is opened.
+        Object::Jwt { .. } => unreachable!("jwt is handled before DB setup"),
     }
     Ok(())
 }

@@ -28,10 +28,6 @@ name = "checker-lambda"
 path = "src/bin/checker-lambda.rs"
 
 [[bin]]
-name = "make-jwt"
-path = "src/bin/make-jwt.rs"
-
-[[bin]]
 name = "cli"
 path = "src/bin/cli.rs"
 
