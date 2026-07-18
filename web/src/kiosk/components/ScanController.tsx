@@ -35,6 +35,7 @@ export default function ScanController(props: {
   const session = useKioskSession();
   const smallCategories = !!session?.config?.smallCategories;
   const easyTimeEntry = !!session?.config?.easyTimeEntry;
+  const newCategories = !!session?.config?.newCategories;
 
   const [transactionState, dispatchTransaction] = useReducer(reducer, {
     transactions: [],
@@ -331,6 +332,7 @@ export default function ScanController(props: {
         onSelectCategory={onSelectCategory}
         uuid={transactionUuid}
         smallCategories={smallCategories}
+        newCategories={newCategories}
       />
       <ScanScreenAdjust
         screenPosition={adjustPos}
@@ -340,6 +342,7 @@ export default function ScanController(props: {
         onEditCategory={onEditCategory}
         isSubmitting={signOutIsInFlight}
         easyTimeEntry={easyTimeEntry}
+        newCategories={newCategories}
       />
     </>
   );

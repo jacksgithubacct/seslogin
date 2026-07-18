@@ -27,6 +27,8 @@ interface BasicSessionModeFieldsProps {
   onSmallCategoriesChange: (next: boolean) => void;
   easyTimeEntry: boolean;
   onEasyTimeEntryChange: (next: boolean) => void;
+  newCategories: boolean;
+  onNewCategoriesChange: (next: boolean) => void;
   configJson: string;
 }
 
@@ -107,6 +109,23 @@ function getEasyTimeEntryFromConfig(config: ConfigObject): boolean {
   return !!config.easyTimeEntry;
 }
 
+function withNewCategories(
+  config: ConfigObject,
+  enabled: boolean,
+): ConfigObject {
+  const next = { ...config };
+  if (enabled) {
+    next.newCategories = true;
+  } else {
+    delete next.newCategories;
+  }
+  return next;
+}
+
+function getNewCategoriesFromConfig(config: ConfigObject): boolean {
+  return !!config.newCategories;
+}
+
 function initializeConfigState(initialConfig: string): InitialConfigState {
   const parsed = parseConfigObject(initialConfig);
   const sessionMode = getSessionModeFromConfig(parsed);
@@ -170,6 +189,8 @@ function BasicSessionModeFields({
   onSmallCategoriesChange,
   easyTimeEntry,
   onEasyTimeEntryChange,
+  newCategories,
+  onNewCategoriesChange,
   configJson,
 }: BasicSessionModeFieldsProps) {
   return (
@@ -238,6 +259,20 @@ function BasicSessionModeFields({
                 use a touch-friendly 12-hour keypad with an explicit confirm
                 step and quick Yesterday/Today buttons on the sign-out Adjust
                 screen, instead of the default 24-hour numeric keypad
+              </span>
+            </label>
+            <label className="grid grid-cols-[auto_auto_1fr] items-start gap-x-2">
+              <input
+                type="checkbox"
+                checked={newCategories}
+                onChange={(e) => onNewCategoriesChange(e.target.checked)}
+                className="mt-1"
+              />
+              <span className="font-semibold">New categories</span>
+              <span className="text-neutral-600">
+                use the reworked category list on the sign-out screens — new
+                icon artwork, with several retired subcategories removed and
+                others reordered
               </span>
             </label>
           </div>
@@ -329,6 +364,7 @@ export default function SessionForm({
   const sessionMode = getSessionModeFromConfig(parsedConfig);
   const smallCategories = getSmallCategoriesFromConfig(parsedConfig);
   const easyTimeEntry = getEasyTimeEntryFromConfig(parsedConfig);
+  const newCategories = getNewCategoriesFromConfig(parsedConfig);
 
   function setEditorMode(nextEditorMode: ConfigEditorMode) {
     if (configEditorMode === nextEditorMode) {
@@ -358,6 +394,14 @@ export default function SessionForm({
     setConfigJson(JSON.stringify(nextConfig, null, 2));
   }
 
+  function handleNewCategoriesChange(enabled: boolean) {
+    const nextConfig = withNewCategories(
+      parseConfigObject(configJson),
+      enabled,
+    );
+    setConfigJson(JSON.stringify(nextConfig, null, 2));
+  }
+
   function handleAdvancedConfigChange(event: ChangeEvent<HTMLTextAreaElement>) {
     const nextConfigText = event.target.value;
     setConfigJson(nextConfigText);
@@ -379,6 +423,8 @@ export default function SessionForm({
             onSmallCategoriesChange={handleSmallCategoriesChange}
             easyTimeEntry={easyTimeEntry}
             onEasyTimeEntryChange={handleEasyTimeEntryChange}
+            newCategories={newCategories}
+            onNewCategoriesChange={handleNewCategoriesChange}
             configJson={configJson}
           />
         )}
