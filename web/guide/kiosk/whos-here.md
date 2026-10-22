@@ -22,3 +22,16 @@ It helps the last person out make sure nobody is left signed in.
 
 The kiosk never signs anyone out without those steps, so a person always confirms
 the times.
+
+## If it says it couldn't sign someone out
+
+Now and then a red message appears, such as **could not sign out Alice Anderson:
+Already signed out**. Nothing has been changed, and there are no steps to redo.
+
+- **Already signed out**, or **That sign-in no longer exists**: they've already
+  been signed out, or the entry was removed, so the list was a little out of date.
+  It catches up by itself.
+- **network issue while starting the sign-out**: the kiosk couldn't reach the
+  server. Check the connection and press **Sign out** again.
+- **the server's answer was incomplete**: press **Sign out** again. If it keeps
+  happening, tell your unit's SESLogin administrator.
