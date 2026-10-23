@@ -40,7 +40,6 @@ import { useKioskSession } from "./useKioskSession";
 import type { ScreenPosition } from "../../styles";
 import { isValidMemberIdText } from "../../lib/memberId";
 import {
-  getErrorCode,
   getServerErrorMessage,
   isMutationFieldError,
 } from "../../lib/relayErrors";
@@ -60,7 +59,7 @@ export default function ScanController(props: {
   onSigningOutNameChange?: (name: string | null) => void;
 }) {
   const session = useKioskSession();
-  const { applyOwnResult, retry: refreshLivePeriods } = useLivePeriods();
+  const { applyOwnResult } = useLivePeriods();
   const guestsEnabled = !!session?.config?.guests;
   const quickPickCategories = !!session?.config?.quickPickCategories;
   const confirmVisitors = !!session?.config?.confirmVisitors;
@@ -502,20 +501,33 @@ export default function ScanController(props: {
           ? `could not sign out ${name}: ${serverMessage}`
           : "network issue while starting the sign-out for " + name,
       });
-      // The row we pressed is out of date (already signed out, or gone), so the
-      // list is too: fetch it again rather than leave a dead row to be pressed.
-      const code = getErrorCode(err);
-      if (code === "CONFLICT" || code === "NOT_FOUND") {
-        refreshLivePeriods();
-      }
       return;
     } finally {
       listSignOutBusyRef.current = false;
       setListSignOutBusy(false);
     }
 
+    // The screens that follow need the period and its person, and only a
+    // SIGN_OUT_PENDING answer means a sign-out has been started. The server sends
+    // all three today, but anything else is treated as a failure rather than
+    // acted on: a missing period would throw here with the transaction still
+    // LOADING (leaving the kiosk stuck on "Fetching information"), a missing
+    // person would crash the screen that shows it, and another state would carry
+    // on into a sign-out that was never started.
+    const answer = res.scanStartSignOut;
+    if (answer.state !== "SIGN_OUT_PENDING" || !answer.period?.person) {
+      console.error("Unexpected answer to scanStartSignOut:", answer);
+      audioError.play();
+      dispatchTransaction({
+        type: "ERROR",
+        uuid,
+        message: `could not sign out ${name}: the server's answer was incomplete`,
+      });
+      return;
+    }
+
     audioSuccess.play();
-    resolveSignOutPending(uuid, res.scanStartSignOut);
+    resolveSignOutPending(uuid, answer);
   }
 
   // most recent transaction
