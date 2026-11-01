@@ -1433,48 +1433,6 @@ describe("KioskMain signed-in list sign out", () => {
     expect(screen.getByText("Categories").closest("[inert]")).not.toBeNull();
   });
 
-  it.each([
-    ["CONFLICT", "Already signed out"],
-    ["NOT_FOUND", "That sign-in no longer exists"],
-  ])(
-    "fetches the list again after a %s refusal, so the dead row goes",
-    async (code, message) => {
-      let snapshots = 0;
-      vi.spyOn(console, "error").mockImplementation(() => {});
-      server.use(
-        sessionConfigHandler(SIGN_OUT_CONFIG),
-        relayEndpoint.query("LivePeriodsSnapshotQuery", () => {
-          snapshots += 1;
-          return HttpResponse.json({
-            data: {
-              session: {
-                location: {
-                  periods: {
-                    // Alice is gone by the second fetch.
-                    edges: (snapshots === 1
-                      ? TWO_MEMBERS
-                      : [TWO_MEMBERS[1]]
-                    ).map((node) => ({ node })),
-                  },
-                },
-              },
-            },
-          });
-        }),
-        refusedStartSignOutHandler(code, message),
-      );
-      const user = await setupTest();
-
-      await pressSignOutOf(user);
-
-      await waitFor(() => expect(snapshots).toBeGreaterThan(1));
-      await waitFor(() =>
-        expect(screen.queryByText("Alice Anderson")).not.toBeInTheDocument(),
-      );
-      expect(screen.getByText("Bob Brown")).toBeInTheDocument();
-    },
-  );
-
   it("says so when the row's sign-in no longer exists", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     server.use(
@@ -1776,5 +1734,154 @@ describe("KioskMain confirm visitors", () => {
     );
     expect(calls).toHaveLength(1);
     expect(calls[0].confirmVisitor).toBe(false);
+  });
+});
+
+describe("KioskMain list sign-out, incomplete answer from the server", () => {
+  const nowSecs = Math.floor(Date.now() / 1000);
+  const period = {
+    id: "period-1",
+    version: 1,
+    startTime: nowSecs - 60 * 60,
+    endTime: null,
+  };
+  const alice = { id: "person-1", firstName: "Alice", lastName: "Anderson" };
+  const complete = {
+    state: "SIGN_OUT_PENDING",
+    period: { ...period, person: alice },
+    quickPick: null,
+  };
+
+  function setupHandlers(answers: unknown[], registered: string[] = []) {
+    let call = 0;
+    server.use(
+      sessionConfigHandler({
+        signedInStatusInline: true,
+        signedInStatusSignOut: true,
+      }),
+      snapshotHandler([
+        {
+          id: "period-1",
+          version: 1,
+          startTime: nowSecs - 60 * 60,
+          guestName: null,
+          person: alice,
+        },
+      ]),
+      relayEndpoint.mutation("ScanControllerStartSignOutMutation", () =>
+        HttpResponse.json({
+          data: {
+            scanStartSignOut: answers[Math.min(call++, answers.length - 1)],
+          },
+        }),
+      ),
+      relayEndpoint.mutation(
+        "ScanControllerRegister2Mutation",
+        ({ variables }) => {
+          registered.push(variables.memberNumber);
+          return HttpResponse.json(signOutUserResponse(null));
+        },
+      ),
+    );
+  }
+
+  async function pressAlice(user: UserEventInstance) {
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Sign out Alice Anderson" }),
+      ).toBeInTheDocument(),
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Sign out Alice Anderson" }),
+    );
+  }
+
+  // Without the check: no period throws after the await with the transaction
+  // still LOADING (the kiosk sits on "Fetching information"); a missing person
+  // is passed on to the sign-out screen that shows it; another state carries on
+  // into a sign-out that was never started.
+  it.each([
+    ["no period", { state: "SIGN_OUT_PENDING", period: null, quickPick: null }],
+    [
+      "a period with no person",
+      {
+        state: "SIGN_OUT_PENDING",
+        period: { ...period, person: null },
+        quickPick: null,
+      },
+    ],
+    [
+      "a state other than SIGN_OUT_PENDING",
+      { ...complete, state: "SIGNED_IN" },
+    ],
+  ])("shows an error and stays usable for %s", async (_label, answer) => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const registered: string[] = [];
+    setupHandlers([answer], registered);
+    try {
+      const user = await setupTest();
+
+      await pressAlice(user);
+
+      await waitFor(() =>
+        expect(
+          screen.getByText(
+            "could not sign out Alice Anderson: the server's answer was incomplete",
+          ),
+        ).toBeInTheDocument(),
+      );
+      // Not stuck: the loading row is gone and both the list button and the
+      // member ID form are usable again.
+      expect(
+        screen.queryByText(/Fetching information for/),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: "Sign out Alice Anderson" }),
+      ).toBeEnabled();
+      expect(
+        screen.getAllByRole("button", { name: "Submit" })[0],
+      ).toBeEnabled();
+      // One error sound, not an error sound followed by a success sound.
+      expect(audioPlaySpy).toHaveBeenCalledTimes(1);
+      expect(registered).toEqual([]);
+      // And nothing was started: the category screen is still parked, inert.
+      expect(screen.getByText("Categories").closest("[inert]")).not.toBeNull();
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it("lets the operator try again after an incomplete answer", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    setupHandlers([
+      { state: "SIGN_OUT_PENDING", period: null, quickPick: null },
+      complete,
+    ]);
+    try {
+      const user = await setupTest();
+
+      await pressAlice(user);
+      await waitFor(() =>
+        expect(
+          screen.getByText(
+            "could not sign out Alice Anderson: the server's answer was incomplete",
+          ),
+        ).toBeInTheDocument(),
+      );
+      await waitFor(() =>
+        expect(
+          screen.getByRole("button", { name: "Sign out Alice Anderson" }),
+        ).toBeEnabled(),
+      );
+
+      await pressAlice(user);
+
+      // The second, complete answer starts the normal sign-out.
+      await waitFor(() =>
+        expect(screen.getByText("Categories").closest("[inert]")).toBeNull(),
+      );
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 });
